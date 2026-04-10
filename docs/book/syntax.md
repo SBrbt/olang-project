@@ -71,16 +71,6 @@ type Int5 = array<i32, 5>;
 11. `&&`
 12. `||`
 
-#### Operators
-
-| Operator | Description |
-|----------|-------------|
-| `+ - * / %` | Arithmetic |
-| `== != < > <= >=` | Comparison |
-| `&& || !` | Logical |
-| `& | ^ << >>` | Bitwise |
-| `-x` | Negation |
-
 #### Type Operations
 
 ```olang
