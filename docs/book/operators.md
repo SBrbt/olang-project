@@ -33,7 +33,7 @@ Returns `bool`.
 | Operator | Description |
 |----------|-------------|
 | `&&` | Logical AND |
-| `||` | Logical OR |
+| `\|\|` | Logical OR |
 | `!` | Logical NOT |
 
 ```olang
@@ -46,7 +46,7 @@ if (!done) { }
 | Operator | Example | Description |
 |----------|---------|-------------|
 | `&` | `a & b` | Bitwise AND |
-| `|` | `a | b` | Bitwise OR |
+| `\|` | `a \| b` | Bitwise OR |
 | `^` | `a ^ b` | Bitwise XOR |
 | `<<` | `a << n` | Left shift |
 | `>>` | `a >> n` | Right shift |
