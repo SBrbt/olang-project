@@ -30,9 +30,9 @@
 ### Compilation Flow
 
 ```
-hello.ol ──→ olang ──→ hello.oobj ──┐
-                                     ├──→ alinker ──→ hello.elf
-lib.ol ────→ olang ──→ lib.oobj ────┘
+hello.ol ──> olang ──> hello.oobj ──┐
+                                    ├──> alinker ──> hello.elf
+lib.ol ────> olang ──> lib.oobj ────┘
 ```
 
 ### Components

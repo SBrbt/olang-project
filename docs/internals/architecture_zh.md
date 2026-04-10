@@ -30,9 +30,9 @@
 ### 编译流程
 
 ```
-hello.ol ──→ olang ──→ hello.oobj ──┐
-                                     ├──→ alinker ──→ hello.elf
-lib.ol ────→ olang ──→ lib.oobj ────┘
+hello.ol ──> olang ──> hello.oobj ──┐
+                                    ├──> alinker ──> hello.elf
+lib.ol ────> olang ──> lib.oobj ────┘
 ```
 
 ### 组件
