@@ -50,6 +50,8 @@ type Ident = array<ElementType, Size>;
 type Int5 = array<i32, 5>;
 ```
 
+> **Aggregate types** are arrays and structs. They can be initialized after declaration, unlike scalars (primitive types like `i32`, `bool`, etc.) which must be initialized at declaration.
+
 ---
 
 ### Expressions
@@ -94,8 +96,8 @@ addr expr            // address-of
 
 #### Variable Binding
 ```olang
-let Ident: Type = Expr;  // scalars must be initialized
-let Ident: Type;         // aggregates can defer
+let Ident: Type = Expr;  // scalars (primitives) must be initialized
+let Ident: Type;       // aggregates (arrays/structs) can defer initialization
 ```
 
 #### Assignment

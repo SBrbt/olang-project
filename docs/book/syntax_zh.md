@@ -50,6 +50,8 @@ type Ident = array<ElementType, Size>;
 type Int5 = array<i32, 5>;
 ```
 
+> **聚合类型**指数组和结构体。与标量（`i32`、`bool`等原始类型）不同，聚合类型允许先声明、延后初始化。
+
 ---
 
 ### 表达式
@@ -94,8 +96,8 @@ addr expr            // 取地址
 
 #### 变量绑定
 ```olang
-let Ident: Type = Expr;  // 标量必须初始化
-let Ident: Type;         // 聚合可延后
+let Ident: Type = Expr;  // 标量（原始类型）必须初始化
+let Ident: Type;         // 聚合类型（数组/结构体）可延后初始化
 ```
 
 #### 赋值
