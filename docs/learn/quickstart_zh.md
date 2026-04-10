@@ -33,7 +33,7 @@ make check
 
 ### 第一个程序
 
-创建 `hello.ol`：
+在`examples/programs`里创建 `hello.ol`：
 
 ```olang
 extern fn main() -> i32 {
@@ -45,8 +45,9 @@ extern fn main() -> i32 {
 
 ```bash
 mkdir -p examples/out
-bash examples/olc -o examples/out/hello.elf hello.ol
-./examples/out/hello.elf && echo $?
+bash examples/olc -o examples/out/hello.elf examples/programs/hello.ol
+./examples/out/hello.elf
+echo $?
 # 42
 ```
 

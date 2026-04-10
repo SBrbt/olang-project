@@ -33,7 +33,7 @@ make check
 
 ### First Program
 
-Create `hello.ol`:
+Create `hello.ol` in `examples/programs`:
 
 ```olang
 extern fn main() -> i32 {
@@ -45,8 +45,9 @@ Compile and run:
 
 ```bash
 mkdir -p examples/out
-bash examples/olc -o examples/out/hello.elf hello.ol
-./examples/out/hello.elf && echo $?
+bash examples/olc -o examples/out/hello.elf examples/programs/hello.ol
+./examples/out/hello.elf
+echo $?
 # 42
 ```
 
