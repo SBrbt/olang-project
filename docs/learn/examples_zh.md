@@ -52,6 +52,8 @@ make check
 |------|------|
 | `ex_rt_deep_recursion.ol` | 递归 |
 | `ex_rt_six_args.ol` | 6个参数 |
+| `ex_rt_eight_args.ol` | 8个寄存器参数 |
+| `ex_rt_many_args.ol` | 10个参数（寄存器+栈） |
 
 #### 聚合类型
 

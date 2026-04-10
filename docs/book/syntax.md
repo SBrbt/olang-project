@@ -128,7 +128,7 @@ Params ::= Param (, Param)*
 Param  ::= Ident: Type
 ```
 
-**Limit**: maximum 6 parameters.
+**Limit**: up to 8 register parameters; additional parameters are passed on the stack.
 
 #### Global Variables
 ```olang

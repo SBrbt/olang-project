@@ -137,7 +137,7 @@ extern fn main() -> i32 {
 extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
 ```
 
-**限制**：最多 6 个参数。
+**限制**：最多 8 个寄存器参数；更多参数通过栈传递。
 
 #### 递归
 
@@ -202,12 +202,13 @@ let s: ptr = addr "Hello\n";
 
 #### 系统调用示例
 
+使用 kasm POSIX 封装层（`libposix.kasm`）提供的 `posix_write`：
+
 ```olang
-extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
+extern fn posix_write(fd: i64, buf: ptr, n: i64) -> i64;
 
 extern fn main() -> i32 {
-    let msg: ptr = addr "Hello from OLang!\n";
-    write(1i32, msg, 19u64);
+    posix_write(1i64, "Hello from OLang!\n", 18i64);
     return 0;
 }
 ```

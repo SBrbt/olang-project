@@ -80,11 +80,16 @@ typedef struct {
 
 ### 代码生成细节
 
-#### 函数调用 (System V AMD64)
+#### 函数调用 (OLang ABI)
 
-参数寄存器：rdi, rsi, rdx, rcx, r8, r9  
+OLang 使用自定义调用约定，与 SysV AMD64 解耦。
+
+寄存器参数：r12, r13, r14, r15, rdi, rsi, r8, r9（最多 8 个）  
+栈溢出：第 9 个及之后的参数通过栈传递（从右向左 push）  
 返回值：rax  
-限制：最多 6 个参数
+
+kasm POSIX 封装层（`libposix.kasm`）负责将 OLang ABI 寄存器
+转换为 Linux syscall 寄存器（rdi, rsi, rdx, r10, r8, r9）。
 
 #### 聚合类型拷贝
 

@@ -353,10 +353,6 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
       const OlFuncDef *fd = find_func(S->prog, e->u.call.callee);
       size_t i;
       if (ex) {
-        if (ex->param_count > 6) {
-          sema_err(S, e->line, "current x64 backend supports up to 6 normal call args");
-          return 0;
-        }
         if (e->u.call.arg_count != ex->param_count) {
           sema_err(S, e->line, "wrong arg count");
           return 0;
@@ -372,10 +368,6 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
         return 1;
       }
       if (fd) {
-        if (fd->param_count > 6) {
-          sema_err(S, e->line, "current x64 backend supports up to 6 function args");
-          return 0;
-        }
         if (e->u.call.arg_count != fd->param_count) {
           sema_err(S, e->line, "wrong arg count (fn)");
           return 0;

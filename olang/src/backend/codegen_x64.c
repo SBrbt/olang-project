@@ -272,10 +272,13 @@ static void emit_branch_cond_to_rax(CG *g, const OlExpr *cond, int slot) {
     emit_mov_r64_rbp(g, 0, slot);
 }
 
+/* OLang ABI parameter registers: r12, r13, r14, r15, rdi, rsi, r8, r9 */
+static void emit_mov_r12_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); }
+static void emit_mov_r13_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc5}, 3); }
+static void emit_mov_r14_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc6}, 3); }
+static void emit_mov_r15_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc7}, 3); }
 static void emit_mov_rdi_rax(CG *g) { tx_copy(g, (uint8_t[]){0x48, 0x89, 0xc7}, 3); }
 static void emit_mov_rsi_rax(CG *g) { tx_copy(g, (uint8_t[]){0x48, 0x89, 0xc6}, 3); }
-static void emit_mov_rdx_rax(CG *g) { tx_copy(g, (uint8_t[]){0x48, 0x89, 0xc2}, 3); }
-static void emit_mov_rcx_rax(CG *g) { tx_copy(g, (uint8_t[]){0x48, 0x89, 0xc1}, 3); }
 static void emit_mov_r8_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc0}, 3); }
 static void emit_mov_r9_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc1}, 3); }
 
@@ -573,6 +576,7 @@ static int gen_expr(CG *g, OlExpr *e) {
     }
     case OL_EX_CALL: {
       size_t i;
+      size_t stack_args = 0;
       int *slots = (int *)malloc(e->u.call.arg_count * sizeof(int));
       if (!slots) return -1;
       for (i = 0; i < e->u.call.arg_count; ++i) {
@@ -582,33 +586,38 @@ static int gen_expr(CG *g, OlExpr *e) {
           return -1;
         }
       }
-      for (i = 0; i < e->u.call.arg_count && i < 6; ++i) {
+      /* Push stack-overflow args (9+) right-to-left */
+      if (e->u.call.arg_count > 8) {
+        stack_args = e->u.call.arg_count - 8;
+        for (i = e->u.call.arg_count; i > 8; --i) {
+          emit_mov_r64_rbp(g, 0, slots[i - 1]);
+          /* push rax */
+          txb(g, 0x50);
+        }
+      }
+      /* OLang ABI register args: r12, r13, r14, r15, rdi, rsi, r8, r9 */
+      for (i = 0; i < e->u.call.arg_count && i < 8; ++i) {
         emit_mov_r64_rbp(g, 0, slots[i]);
         switch (i) {
-          case 0:
-            emit_mov_rdi_rax(g);
-            break;
-          case 1:
-            emit_mov_rsi_rax(g);
-            break;
-          case 2:
-            emit_mov_rdx_rax(g);
-            break;
-          case 3:
-            emit_mov_rcx_rax(g);
-            break;
-          case 4:
-            emit_mov_r8_rax(g);
-            break;
-          case 5:
-            emit_mov_r9_rax(g);
-            break;
-          default:
-            break;
+          case 0: emit_mov_r12_rax(g); break;
+          case 1: emit_mov_r13_rax(g); break;
+          case 2: emit_mov_r14_rax(g); break;
+          case 3: emit_mov_r15_rax(g); break;
+          case 4: emit_mov_rdi_rax(g); break;
+          case 5: emit_mov_rsi_rax(g); break;
+          case 6: emit_mov_r8_rax(g);  break;
+          case 7: emit_mov_r9_rax(g);  break;
+          default: break;
         }
       }
       free(slots);
       emit_call_sym(g, sym_for_fn_ref(g, e->u.call.callee));
+      /* Clean up pushed stack args */
+      if (stack_args > 0) {
+        int32_t cleanup = (int32_t)(stack_args * 8);
+        tx_copy(g, (uint8_t[]){0x48, 0x81, 0xc4}, 3); /* add rsp, imm32 */
+        tx_copy(g, (uint8_t *)&cleanup, 4);
+      }
       if (e->ty.kind == OL_TY_VOID) {
         out = alloc_slot(g);
         return out;
@@ -1217,24 +1226,44 @@ static int gen_function(CG *g, OlFuncDef *fn) {
 
   emit_prologue(g);
   if (g->failed) return 0;
-  for (i = 0; i < fn->param_count; ++i) {
-    int slot = (int)i;
-    int32_t d = slot_disp(slot);
-    static const uint8_t pre[6][3] = {
-        {0x48, 0x89, 0x7d}, {0x48, 0x89, 0x75}, {0x48, 0x89, 0x55},
-        {0x48, 0x89, 0x4d}, {0x4c, 0x89, 0x45}, {0x4c, 0x89, 0x4d},
+  /* OLang ABI: spill register params r12,r13,r14,r15,rdi,rsi,r8,r9 to stack slots */
+  {
+    static const uint8_t pre[8][3] = {
+        {0x4c, 0x89, 0x65}, /* mov [rbp+d], r12 */
+        {0x4c, 0x89, 0x6d}, /* mov [rbp+d], r13 */
+        {0x4c, 0x89, 0x75}, /* mov [rbp+d], r14 */
+        {0x4c, 0x89, 0x7d}, /* mov [rbp+d], r15 */
+        {0x48, 0x89, 0x7d}, /* mov [rbp+d], rdi */
+        {0x48, 0x89, 0x75}, /* mov [rbp+d], rsi */
+        {0x4c, 0x89, 0x45}, /* mov [rbp+d], r8  */
+        {0x4c, 0x89, 0x4d}, /* mov [rbp+d], r9  */
     };
-    if (i >= 6) {
-      cg_err(g, "too many params");
-      return 0;
+    for (i = 0; i < fn->param_count; ++i) {
+      int slot = (int)i;
+      int32_t d = slot_disp(slot);
+      if (i < 8) {
+        if (d < -128 || d > 127) {
+          cg_err(g, "param frame too large");
+          return 0;
+        }
+        tx_copy(g, pre[i], 3);
+        txb(g, (uint8_t)(int8_t)d);
+      } else {
+        /* Stack-overflow params: load from [rbp + 16 + (i-8)*8] into rax, store to slot */
+        int32_t src_off = 16 + (int32_t)(i - 8) * 8;
+        /* mov rax, [rbp + src_off] */
+        tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x85}, 3);
+        tx_copy(g, (uint8_t *)&src_off, 4);
+        /* mov [rbp + d], rax */
+        if (d >= -128 && d <= 127) {
+          tx_copy(g, (uint8_t[]){0x48, 0x89, 0x45, (uint8_t)(int8_t)d}, 4);
+        } else {
+          tx_copy(g, (uint8_t[]){0x48, 0x89, 0x85}, 3);
+          tx_copy(g, (uint8_t *)&d, 4);
+        }
+      }
+      if (!bind_local(g, fn->params[i].name, slot, &fn->params[i].ty)) return 0;
     }
-    if (d < -128 || d > 127) {
-      cg_err(g, "param frame too large");
-      return 0;
-    }
-    tx_copy(g, pre[i], 3);
-    txb(g, (uint8_t)(uint8_t)d);
-    if (!bind_local(g, fn->params[i].name, slot, &fn->params[i].ty)) return 0;
   }
 
   if (!gen_stmt(g, fn, fn->body)) return 0;

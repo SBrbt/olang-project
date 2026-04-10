@@ -137,7 +137,7 @@ extern fn main() -> i32 {
 extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
 ```
 
-**Limit**: maximum 6 parameters.
+**Limit**: up to 8 register parameters; additional parameters are passed on the stack.
 
 #### Recursion
 
@@ -202,12 +202,13 @@ let s: ptr = addr "Hello\n";
 
 #### System Call Example
 
+Uses `posix_write` from the kasm POSIX shim (`libposix.kasm`):
+
 ```olang
-extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
+extern fn posix_write(fd: i64, buf: ptr, n: i64) -> i64;
 
 extern fn main() -> i32 {
-    let msg: ptr = addr "Hello from OLang!\n";
-    write(1i32, msg, 19u64);
+    posix_write(1i64, "Hello from OLang!\n", 18i64);
     return 0;
 }
 ```

@@ -52,6 +52,8 @@ make check
 |---------|-------------|
 | `ex_rt_deep_recursion.ol` | Recursion |
 | `ex_rt_six_args.ol` | 6 parameters |
+| `ex_rt_eight_args.ol` | 8 register parameters |
+| `ex_rt_many_args.ol` | 10 parameters (register + stack) |
 
 #### Aggregate Types
 

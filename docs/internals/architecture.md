@@ -80,11 +80,16 @@ typedef struct {
 
 ### Code Generation Details
 
-#### Function Calls (System V AMD64)
+#### Function Calls (OLang ABI)
 
-Argument registers: rdi, rsi, rdx, rcx, r8, r9  
+OLang uses its own calling convention, decoupled from SysV AMD64.
+
+Register arguments: r12, r13, r14, r15, rdi, rsi, r8, r9 (up to 8)  
+Stack overflow: arguments 9+ passed on the stack (right-to-left push)  
 Return value: rax  
-Limit: maximum 6 arguments
+
+The kasm POSIX shim layer (`libposix.kasm`) converts OLang ABI registers
+to Linux syscall registers (rdi, rsi, rdx, r10, r8, r9).
 
 #### Aggregate Type Copy
 

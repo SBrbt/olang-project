@@ -78,7 +78,7 @@ Field     ::= Ident : Type
 
 ### Limitations
 
-- Maximum 6 function parameters
+- Up to 8 register parameters; additional parameters passed via stack
 - Scalar `let` must be initialized
 - No compound assignment operators
 
