@@ -6,9 +6,9 @@
 
 ```
 ┌─────────────────────────────────────────┐
-│              olang compiler              │
+│              olang compiler             │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
-│  │ Frontend│→│   IR    │→│ Backend │  │
+│  │ Frontend│->│   IR    │->│ Backend │  │
 │  │ lexer   │  │         │  │  x64    │  │
 │  │ parser  │  │         │  │ codegen │  │
 │  │ sema    │  │         │  │         │  │
@@ -16,13 +16,13 @@
 └─────────────────────────────────────────┘
                     ↓ .oobj
 ┌─────────────────────────────────────────┐
-│              kasm assembler              │
+│              kasm assembler             │
 │           (JSON-ISA driven)             │
 └─────────────────────────────────────────┘
                     ↓ .oobj
 ┌─────────────────────────────────────────┐
-│            alinker linker                │
-│         (link.json script driven)         │
+│            alinker linker               │
+│         (link.json script driven)       │
 └─────────────────────────────────────────┘
                     ↓ ELF
 ```
