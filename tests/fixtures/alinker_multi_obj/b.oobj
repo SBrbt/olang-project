@@ -1,0 +1,4 @@
+OOBJv2
+target|x86_64-linux-gnu
+section|.text|16|5|c3
+symbol|helper|0|0|global

@@ -1,0 +1,7 @@
+extern fn main() -> i32 {
+  if (true) {
+    return 0;
+  } else {
+    return 1;
+  }
+}

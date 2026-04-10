@@ -1,0 +1,72 @@
+{
+  "name": "x86_64-linux-core",
+  "instructions": [
+    { "mnemonic": "ret", "bytes": "c3", "imm_bits": 0 },
+    { "mnemonic": "nop", "bytes": "90", "imm_bits": 0 },
+    { "mnemonic": "int3", "bytes": "cc", "imm_bits": 0 },
+    { "mnemonic": "cld", "bytes": "fc", "imm_bits": 0 },
+    { "mnemonic": "syscall", "bytes": "0f05", "imm_bits": 0 },
+
+    { "mnemonic": "push_rbp", "bytes": "55", "imm_bits": 0 },
+    { "mnemonic": "push_rbx", "bytes": "53", "imm_bits": 0 },
+    { "mnemonic": "push_r12", "bytes": "4154", "imm_bits": 0 },
+    { "mnemonic": "push_r13", "bytes": "4155", "imm_bits": 0 },
+    { "mnemonic": "push_r14", "bytes": "4156", "imm_bits": 0 },
+    { "mnemonic": "push_r15", "bytes": "4157", "imm_bits": 0 },
+    { "mnemonic": "pop_rbp", "bytes": "5d", "imm_bits": 0 },
+    { "mnemonic": "pop_rbx", "bytes": "5b", "imm_bits": 0 },
+    { "mnemonic": "pop_r12", "bytes": "415c", "imm_bits": 0 },
+    { "mnemonic": "pop_r13", "bytes": "415d", "imm_bits": 0 },
+    { "mnemonic": "pop_r14", "bytes": "415e", "imm_bits": 0 },
+    { "mnemonic": "pop_r15", "bytes": "415f", "imm_bits": 0 },
+    { "mnemonic": "leave", "bytes": "c9", "imm_bits": 0 },
+
+    { "mnemonic": "call_rel32", "bytes": "e8", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jmp_rel32", "bytes": "e9", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "je_rel32", "bytes": "0f84", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jne_rel32", "bytes": "0f85", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jl_rel32", "bytes": "0f8c", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jge_rel32", "bytes": "0f8d", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jle_rel32", "bytes": "0f8e", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jg_rel32", "bytes": "0f8f", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jb_rel32", "bytes": "0f82", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jae_rel32", "bytes": "0f83", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "jbe_rel32", "bytes": "0f86", "imm_bits": 32, "reloc": "pc32" },
+    { "mnemonic": "ja_rel32", "bytes": "0f87", "imm_bits": 32, "reloc": "pc32" },
+
+    { "mnemonic": "mov_eax_imm32", "bytes": "b8", "imm_bits": 32 },
+    { "mnemonic": "mov_ecx_imm32", "bytes": "b9", "imm_bits": 32 },
+    { "mnemonic": "mov_edx_imm32", "bytes": "ba", "imm_bits": 32 },
+    { "mnemonic": "mov_ebx_imm32", "bytes": "bb", "imm_bits": 32 },
+    { "mnemonic": "mov_esi_imm32", "bytes": "be", "imm_bits": 32 },
+    { "mnemonic": "mov_edi_imm32", "bytes": "bf", "imm_bits": 32 },
+
+    { "mnemonic": "mov_rax_imm64", "bytes": "48b8", "imm_bits": 64 },
+    { "mnemonic": "mov_rdi_imm64", "bytes": "48bf", "imm_bits": 64 },
+    { "mnemonic": "mov_rsi_imm64", "bytes": "48be", "imm_bits": 64 },
+    { "mnemonic": "mov_rdx_imm64", "bytes": "48ba", "imm_bits": 64 },
+    { "mnemonic": "mov_rcx_imm64", "bytes": "48b9", "imm_bits": 64 },
+
+    { "mnemonic": "mov_rdi_rax", "bytes": "4889c7", "imm_bits": 0 },
+    { "mnemonic": "mov_rsi_rax", "bytes": "4889c6", "imm_bits": 0 },
+    { "mnemonic": "mov_rdx_rax", "bytes": "4889c2", "imm_bits": 0 },
+    { "mnemonic": "mov_rax_rdi", "bytes": "4889f8", "imm_bits": 0 },
+    { "mnemonic": "mov_rax_rsi", "bytes": "4889f0", "imm_bits": 0 },
+    { "mnemonic": "mov_rsp_rbp", "bytes": "4889ec", "imm_bits": 0 },
+    { "mnemonic": "mov_rbp_rsp", "bytes": "4889e5", "imm_bits": 0 },
+    { "mnemonic": "mov_edi_eax", "bytes": "89c7", "imm_bits": 0 },
+
+    { "mnemonic": "xor_eax_eax", "bytes": "31c0", "imm_bits": 0 },
+    { "mnemonic": "xor_edi_edi", "bytes": "31ff", "imm_bits": 0 },
+    { "mnemonic": "xor_edx_edx", "bytes": "31d2", "imm_bits": 0 },
+
+    { "mnemonic": "add_rax_imm32", "bytes": "4805", "imm_bits": 32 },
+    { "mnemonic": "sub_rsp_imm32", "bytes": "4881ec", "imm_bits": 32 },
+    { "mnemonic": "add_rsp_imm32", "bytes": "4881c4", "imm_bits": 32 },
+
+    { "mnemonic": "test_eax_eax", "bytes": "85c0", "imm_bits": 0 },
+    { "mnemonic": "test_rax_rax", "bytes": "4885c0", "imm_bits": 0 },
+    { "mnemonic": "cmp_eax_imm32", "bytes": "3d", "imm_bits": 32 },
+    { "mnemonic": "cmp_rdi_imm32", "bytes": "4881ff", "imm_bits": 32 }
+  ]
+}

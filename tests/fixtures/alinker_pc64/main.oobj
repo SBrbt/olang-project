@@ -1,0 +1,6 @@
+OOBJv2
+target|x86_64-linux-gnu
+section|.text|16|5|0000000000000000c3
+symbol|_start|0|0|global
+symbol|lab|0|8|local
+reloc|0|0|lab|pc64|0

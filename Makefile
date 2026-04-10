@@ -1,0 +1,63 @@
+CC := gcc
+CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -O2
+
+# olang/kasm/obinutils only need oobj; alinker also needs link_script.c
+OOBJ_SRC := common/oobj.c
+ALINKER_COMMON_SRC := common/oobj.c common/link_script.c
+COMMON_INC := -Icommon
+OLANG_SRC := \
+	olang/src/ir.c \
+	olang/src/frontend/lexer.c \
+	olang/src/frontend/parser.c \
+	olang/src/frontend/sema.c \
+	olang/src/backend/x64_backend.c \
+	olang/src/backend/codegen_x64.c \
+	olang/src/backend/target_info/x64_target_info.c \
+	olang/src/backend/target_info/target_registry.c \
+	olang/src/backend/reloc/x64_reloc.c
+
+BIN_DIR := bin
+
+all: $(BIN_DIR)/alinker $(BIN_DIR)/kasm $(BIN_DIR)/olang $(BIN_DIR)/obinutils
+
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+$(BIN_DIR)/alinker: $(BIN_DIR) alinker/src/main.c alinker/src/link_core.c $(ALINKER_COMMON_SRC)
+	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ alinker/src/main.c alinker/src/link_core.c $(ALINKER_COMMON_SRC)
+
+$(BIN_DIR)/kasm: $(BIN_DIR) kasm/src/main.c kasm/src/kasm_asm.c kasm/src/kasm_isa.c $(OOBJ_SRC)
+	$(CC) $(CFLAGS) $(COMMON_INC) -Ikasm/src -o $@ kasm/src/main.c kasm/src/kasm_asm.c kasm/src/kasm_isa.c $(OOBJ_SRC)
+
+$(BIN_DIR)/olang: $(BIN_DIR) olang/src/main.c $(OLANG_SRC) $(OOBJ_SRC)
+	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ olang/src/main.c $(OLANG_SRC) $(OOBJ_SRC)
+
+$(BIN_DIR)/obinutils: $(BIN_DIR) obinutils/src/main.c $(OOBJ_SRC)
+	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ obinutils/src/main.c $(OOBJ_SRC)
+
+clean:
+	rm -rf $(BIN_DIR) examples/out
+
+check: all check-link-script check-alinker check-kasm check-olang
+	@echo "OK: all checks passed"
+
+check-olang: $(BIN_DIR)/olang
+	bash tests/run_programs_olc.sh
+	bash tests/check_olang_bounds.sh
+
+check-alinker: $(BIN_DIR)/alinker
+	bash tests/alinker_smoke.sh
+	bash tests/alinker_pc64.sh
+	bash tests/alinker_multi_obj.sh
+
+check-kasm: $(BIN_DIR)/kasm $(BIN_DIR)/obinutils
+	bash tests/kasm_label_comment.sh
+	bash tests/kasm_bytes_tab.sh
+
+$(BIN_DIR)/link_script_test: $(BIN_DIR) tests/link_script_test.c common/link_script.c
+	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ tests/link_script_test.c common/link_script.c
+
+check-link-script: $(BIN_DIR)/link_script_test
+	$(BIN_DIR)/link_script_test
+
+.PHONY: all clean check check-link-script check-alinker check-kasm check-olang

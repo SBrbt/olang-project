@@ -1,0 +1,16 @@
+.extern main
+
+.global krt_init
+krt_init:
+inst ret
+
+.global krt_fini
+krt_fini:
+inst ret
+
+.global _start
+_start:
+inst call_rel32 krt_init
+inst call_rel32 main
+inst call_rel32 krt_fini
+inst ret

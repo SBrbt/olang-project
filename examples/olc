@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# olc — Linux x86_64 driver: invokes bin/olang, kasm, alinker; reads link and kasm presets from examples/linux_x86_64/.
+# This script is the complete implementation (not a wrapper); other platforms can copy this script and modify PLATFORM path.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TOOLCHAIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+EXAMPLES="$TOOLCHAIN_ROOT/examples"
+PLATFORM="$EXAMPLES/linux_x86_64"
+export OLANG_TOOLCHAIN_ROOT="$TOOLCHAIN_ROOT"
+
+OLANG="$TOOLCHAIN_ROOT/bin/olang"
+KASM="$TOOLCHAIN_ROOT/bin/kasm"
+ALINKER="$TOOLCHAIN_ROOT/bin/alinker"
+
+EXE_JSON="$PLATFORM/link/exe.json"
+KRT_KASM="$PLATFORM/asm/runtime/krt.kasm"
+OLRT_KASM="$PLATFORM/asm/runtime/olrt.kasm"
+POSIX_KASM="$PLATFORM/asm/lib/libposix.kasm"
+
+MAX_SRC=48
+
+usage() {
+  cat <<'EOF'
+usage: olc -o <out.elf> <a.ol> [b.ol ...]
+       olc -h
+  Linux x86_64 ELF: each .ol -> .oobj, then link with runtime.
+  Preset paths: examples/linux_x86_64/{link/exe.json, asm/**}
+  Requires: toolchain/ make to generate bin/olang, kasm, alinker.
+EOF
+}
+
+for x in "$OLANG" "$KASM" "$ALINKER"; do
+  if [[ ! -x "$x" ]]; then
+    echo "olc: missing $x (cd toolchain && make)" >&2
+    exit 1
+  fi
+done
+
+out_elf=
+sources=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -o)
+      if [[ $# -lt 2 ]]; then
+        echo "olc: missing value for -o" >&2
+        usage >&2
+        exit 2
+      fi
+      out_elf="$2"
+      shift 2
+      ;;
+    -*)
+      echo "olc: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ ${#sources[@]} -ge MAX_SRC ]]; then
+        echo "olc: too many .ol sources (max $MAX_SRC)" >&2
+        exit 2
+      fi
+      sources+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "${out_elf:-}" ]] || [[ ${#sources[@]} -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/olc.XXXXXX")
+trap 'rm -rf "${tmpdir:-}"' EXIT
+
+for i in "${!sources[@]}"; do
+  "$OLANG" --in "${sources[$i]}" -o "$tmpdir/u${i}.oobj"
+done
+
+"$KASM" --in "$KRT_KASM" -o "$tmpdir/krt.oobj"
+"$KASM" --in "$OLRT_KASM" -o "$tmpdir/olrt.oobj"
+"$KASM" --in "$POSIX_KASM" -o "$tmpdir/libposix.oobj"
+
+link_cmd=("$ALINKER" "--script" "$EXE_JSON" "-o" "$out_elf" "--")
+for i in "${!sources[@]}"; do
+  link_cmd+=("$tmpdir/u${i}.oobj")
+done
+link_cmd+=("$tmpdir/libposix.oobj" "$tmpdir/krt.oobj" "$tmpdir/olrt.oobj")
+"${link_cmd[@]}"
+
+chmod 0755 "$out_elf" || {
+  echo "olc: chmod $out_elf: failed" >&2
+  exit 1
+}
+
+exit 0

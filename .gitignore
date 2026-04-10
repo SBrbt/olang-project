@@ -1,0 +1,11 @@
+# C toolchain — 构建与测试产物（由 Makefile clean 也可清除）
+bin/
+examples/out/
+
+# 常见杂项
+*~
+.DS_Store
+*.swp
+*.swo
+tags
+compile_commands.json

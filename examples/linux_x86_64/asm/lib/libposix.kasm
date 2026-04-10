@@ -1,0 +1,111 @@
+# Linux x86-64 syscall shims for OLang examples bundle only (not part of the portable language).
+# SysV ABI from OLang caller: rdi, rsi, rdx, rcx, r8, r9. Linux syscall 4th arg uses r10 — stubs below
+# that take 4+ user args use `mov r10, rcx` before loading rax and `syscall`.
+#
+# Each entry: mov rax, nr; syscall; ret  (x86-64: 48 B8 + imm64 LE + 0F 05 + C3)
+
+.global posix_write
+posix_write:
+.bytes 48 b8 01 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_read
+posix_read:
+.bytes 48 b8 00 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_openat
+posix_openat:
+.bytes 49 89 ca
+.bytes 48 b8 01 01 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_close
+posix_close:
+.bytes 48 b8 03 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_getpid
+posix_getpid:
+.bytes 48 b8 27 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_kill
+posix_kill:
+.bytes 48 b8 3e 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_rt_sigprocmask
+posix_rt_sigprocmask:
+.bytes 49 89 ca
+.bytes 48 b8 0e 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_mmap
+posix_mmap:
+.bytes 49 89 ca
+.bytes 48 b8 09 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_munmap
+posix_munmap:
+.bytes 48 b8 0b 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_clock_gettime
+posix_clock_gettime:
+.bytes 48 b8 e4 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_gettimeofday
+posix_gettimeofday:
+.bytes 48 b8 60 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_fstat
+posix_fstat:
+.bytes 48 b8 05 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_getdents64
+posix_getdents64:
+.bytes 48 b8 d9 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_nanosleep
+posix_nanosleep:
+.bytes 48 b8 23 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_fork
+posix_fork:
+.bytes 48 b8 39 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_wait4
+posix_wait4:
+.bytes 49 89 ca
+.bytes 48 b8 3d 00 00 00 00 00 00 00
+inst syscall
+inst ret
+
+.global posix_exit
+posix_exit:
+.bytes 48 b8 3c 00 00 00 00 00 00 00
+inst syscall
+inst ret
