@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Fits AST name fields [64] including NUL. */
+/* Must be < sizeof(OlLexer::ident) which is 128. */
 enum { OL_MAX_IDENT_LEN = 63 };
 enum { OL_MAX_STR_LIT_BYTES = 1024 * 1024 };
 

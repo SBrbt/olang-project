@@ -15,7 +15,7 @@ static uint32_t hash_path_djb2(const char *s) {
 }
 
 typedef struct SymSlot {
-  char name[64];
+  char name[128];
   OlTypeRef ty;
   char ptrbind_sym[128];
 } SymSlot;

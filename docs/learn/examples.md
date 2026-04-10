@@ -10,11 +10,11 @@
 
 ```bash
 # Run any example
-bash examples/olc -o /tmp/t.elf examples/programs/EXAMPLE.ol
-/tmp/t.elf
+bash examples/olc -o examples/out/t.elf examples/programs/EXAMPLE.ol
+./examples/out/t.elf
 
 # Run all
-bash tests/run_programs_olc.sh
+make check
 ```
 
 ### Index by Category
@@ -58,8 +58,6 @@ bash tests/run_programs_olc.sh
 | Example | Description |
 |---------|-------------|
 | `ex_rt_local_array.ol` | Arrays |
-| `olang_aggregate_copy.ol` | Value copy (test) |
-| `olang_nested_struct.ol` | Nested structs (test) |
 
 #### Multi-file
 
@@ -68,14 +66,14 @@ bash tests/run_programs_olc.sh
 | `multi_file_main.ol` + `multi_file_lib.ol` | Multi-file compilation |
 
 ```bash
-bash examples/olc -o /tmp/t.elf \
+bash examples/olc -o examples/out/multi.elf \
     examples/programs/multi_file_main.ol \
     examples/programs/multi_file_lib.ol
 ```
 
 ### Edge Case Tests
 
-Located in `tests/olang_*.ol`:
+Located in `tests/`:
 
 - `olang_aggregate_copy.ol` — aggregate value copy
 - `olang_nested_struct.ol` — nested struct access

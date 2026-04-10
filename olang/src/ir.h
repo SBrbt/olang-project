@@ -7,8 +7,8 @@
 #include <stdint.h>
 
 typedef struct OlTypeDefStructField {
-  char name[64];
-  char type_name[64];
+  char name[128];
+  char type_name[128];
   uint32_t offset;
 } OlTypeDefStructField;
 
@@ -19,17 +19,17 @@ typedef enum OlTypeDefKind {
 
 typedef struct OlTypeDef {
   OlTypeDefKind kind;
-  char name[64];
+  char name[128];
   OlTypeDefStructField *fields;
   size_t field_count;
-  char elem_type[64];
+  char elem_type[128];
   uint32_t elem_count;
   uint32_t size_bytes;
 } OlTypeDef;
 
 struct OlProgram {
-  char target_name[64];
-  char entry_name[64];
+  char target_name[128];
+  char entry_name[128];
   char source_path[512]; /* set by parser; CU hash for local fn link_name */
   OlExternDecl *externs;
   size_t extern_count;

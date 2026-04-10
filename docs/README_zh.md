@@ -28,8 +28,10 @@
 |------|------|
 | 架构概览 | [internals/architecture_zh.md](internals/architecture_zh.md) |
 | 编译器实现 | [internals/compiler_zh.md](internals/compiler_zh.md) |
+| 汇编器实现 | [internals/assembler_zh.md](internals/assembler_zh.md) |
+| 链接器实现 | [internals/linker_zh.md](internals/linker_zh.md) |
 | 规格文档 | [internals/specs/](internals/specs/) |
 
 ---
 
-**快速链接**: [项目主页](../README_zh.md) | [测试](../tests/README_zh.md) | [源码](../olang/)
+**快速链接**: [项目主页](../README_zh.md) | [示例](../examples/README_zh.md) | [测试](../tests/README_zh.md) | [源码](../olang/)

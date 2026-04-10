@@ -10,11 +10,11 @@
 
 ```bash
 # 运行任意示例
-bash examples/olc -o /tmp/t.elf examples/programs/EXAMPLE.ol
-/tmp/t.elf
+bash examples/olc -o examples/out/t.elf examples/programs/EXAMPLE.ol
+./examples/out/t.elf
 
 # 运行全部
-bash tests/run_programs_olc.sh
+make check
 ```
 
 ### 分类索引
@@ -58,8 +58,6 @@ bash tests/run_programs_olc.sh
 | 示例 | 说明 |
 |------|------|
 | `ex_rt_local_array.ol` | 数组 |
-| `olang_aggregate_copy.ol` | 值拷贝（测试） |
-| `olang_nested_struct.ol` | 嵌套结构体（测试） |
 
 #### 多文件
 
@@ -68,14 +66,14 @@ bash tests/run_programs_olc.sh
 | `multi_file_main.ol` + `multi_file_lib.ol` | 多文件编译 |
 
 ```bash
-bash examples/olc -o /tmp/t.elf \
+bash examples/olc -o examples/out/multi.elf \
     examples/programs/multi_file_main.ol \
     examples/programs/multi_file_lib.ol
 ```
 
 ### 边界测试
 
-位于 `tests/olang_*.ol`：
+位于 `tests/`：
 
 - `olang_aggregate_copy.ol` — 聚合类型值拷贝
 - `olang_nested_struct.ol` — 嵌套结构体访问

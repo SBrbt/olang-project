@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 typedef struct OlTargetInfo {
-  char name[64];
+  char name[128];
   char arch[32];
   char abi[32];
   char ptr_type[16];

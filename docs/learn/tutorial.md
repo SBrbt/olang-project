@@ -234,7 +234,7 @@ extern fn main() -> i32 {
 
 Compile:
 ```bash
-bash examples/olc -o prog.elf main.ol lib.ol
+bash examples/olc -o examples/out/prog.elf main.ol lib.ol
 ```
 
 ---

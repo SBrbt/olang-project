@@ -27,7 +27,7 @@ typedef struct CG {
 
   int next_slot;
   struct {
-    char name[64];
+    char name[128];
     int slot;
     OlTypeRef ty;  /* Type info needed for array element size, etc. */
   } loc[256];
@@ -1074,8 +1074,7 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             /* Load source pointer to rcx */
             emit_mov_gpr_from_slot(g, 1, rs);  /* rcx = source pointer */
             for (w = 0; w < num_words; w++) {
-              int32_t neg_offset = -(int32_t)(w * 8);  /* Negative offset for stack layout */
-              int32_t off8 = (int32_t)(w * 8);  /* Positive for encoding */
+              int32_t neg_offset = -(int32_t)(w * 8);
               /* Load from source: rax = [rcx + neg_offset] = [rcx - off8] */
               if (w == 0) {
                 tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x01}, 3); /* mov rax, [rcx] */

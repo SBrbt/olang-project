@@ -44,8 +44,9 @@ extern fn main() -> i32 {
 编译运行：
 
 ```bash
-bash examples/olc -o hello.elf hello.ol
-./hello.elf && echo $?
+mkdir -p examples/out
+bash examples/olc -o examples/out/hello.elf hello.ol
+./examples/out/hello.elf && echo $?
 # 42
 ```
 

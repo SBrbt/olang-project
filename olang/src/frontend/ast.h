@@ -20,11 +20,11 @@ typedef enum OlTyKind {
 
 typedef struct OlTypeRef {
   OlTyKind kind;
-  char alias_name[64]; /* if OL_TY_ALIAS */
+  char alias_name[128]; /* if OL_TY_ALIAS */
 } OlTypeRef;
 
 typedef struct OlParam {
-  char name[64];
+  char name[128];
   OlTypeRef ty;
 } OlParam;
 
@@ -82,7 +82,7 @@ struct OlExpr {
     size_t str_idx;
     int bool_val;
     uint8_t char_val;
-    char var_name[64];
+    char var_name[128];
     struct {
       OlExpr *inner;
     } neg;
@@ -104,7 +104,7 @@ struct OlExpr {
       OlExpr *inner;
     } cast_;
     struct {
-      char name[64];
+      char name[128];
     } addr;
     struct {
       OlTypeRef elem_ty;
@@ -116,12 +116,12 @@ struct OlExpr {
       OlExpr *val;
     } store;
     struct {
-      char base_ty[64];
-      char field[64];
+      char base_ty[128];
+      char field[128];
       OlExpr *obj; /* optional: NULL means synthetic from ptrbind context */
     } field;
     struct {
-      char arr_ty[64];
+      char arr_ty[128];
       OlExpr *index_expr;
       OlExpr *arr;
     } index_;
@@ -152,7 +152,7 @@ struct OlStmt {
       OlStmt *first;
     } block;
     struct {
-      char name[64];
+      char name[128];
       OlTypeRef ty;
       OlExpr *init;
     } let_;
@@ -174,19 +174,19 @@ struct OlStmt {
     } ret;
     OlExpr *expr;
     struct {
-      char bind[64];
+      char bind[128];
       OlTypeRef ty;
       char symbol[128];
     } ptrbind;
     struct {
-      char bind[64];
+      char bind[128];
       OlTypeRef ty;
     } deref;
   } u;
 };
 
 typedef struct OlFuncDef {
-  char name[64];
+  char name[128];
   char link_name[128]; /* sema: export => name; local fn => __ol_L_<cuhash>_name (unique per .ol) */
   OlTypeRef ret;
   OlParam *params;
@@ -204,11 +204,11 @@ typedef enum OlGlobalSection {
 } OlGlobalSection;
 
 typedef struct OlGlobalDef {
-  char name[64];
+  char name[128];
   OlTypeRef ty;
   OlExpr *init; /* NULL => .bss (or zero .data if @data) */
   OlGlobalSection section;
-  char custom_section[64]; /* when section == OL_GSEC_CUSTOM, e.g. ".mydata" */
+  char custom_section[128]; /* when section == OL_GSEC_CUSTOM, e.g. ".mydata" */
 } OlGlobalDef;
 
 typedef struct OlStringLit {

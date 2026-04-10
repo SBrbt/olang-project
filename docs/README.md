@@ -28,8 +28,10 @@ Choose your path:
 |-------|----------|
 | Architecture | [internals/architecture.md](internals/architecture.md) |
 | Compiler | [internals/compiler.md](internals/compiler.md) |
+| Assembler | [internals/assembler.md](internals/assembler.md) |
+| Linker | [internals/linker.md](internals/linker.md) |
 | Specifications | [internals/specs/](internals/specs/) |
 
 ---
 
-**Quick Links**: [Project Home](../README.md) | [Tests](../tests/README.md) | [Source](../olang/)
+**Quick Links**: [Project Home](../README.md) | [Examples](../examples/README.md) | [Tests](../tests/README.md) | [Source](../olang/)

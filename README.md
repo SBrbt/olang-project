@@ -7,7 +7,9 @@
 A statically typed systems programming language built from scratch.
 
 ```bash
-make all && bash examples/olc -o hello.elf examples/programs/ex_hello.ol && ./hello.elf
+make all
+bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
+./examples/out/hello.elf
 ```
 
 **[Get Started →](docs/README.md)**
@@ -44,4 +46,4 @@ Phase 1 (core features complete): type system, functions, structs, arrays, contr
 └── bin/           # Build output
 ```
 
-**License**: MIT
+**License**: [MIT](LICENSE)

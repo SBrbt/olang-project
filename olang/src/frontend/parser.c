@@ -672,7 +672,7 @@ static OlStmt *parse_stmt(ParseCtx *C) {
   if (C->L->tok == TOK_LBRACE) return parse_block(C);
   if (C->L->tok == TOK_IDENT) {
     OlExpr *atom;
-    char iname[64];
+    char iname[128];
     snprintf(iname, sizeof(iname), "%s", C->L->ident);
     atom = new_expr(OL_EX_VAR, line);
     if (!atom) return NULL;
@@ -940,7 +940,7 @@ static int is_builtin_type_name(const char *t) {
 }
 
 static int parse_typedef(ParseCtx *C) {
-  char name[64];
+  char name[128];
   if (!expect(C, TOK_KW_TYPE)) return 0;
   if (C->L->tok != TOK_IDENT) {
     errf(C, "typedef name");
@@ -957,7 +957,7 @@ static int parse_typedef(ParseCtx *C) {
     if (!expect(C, TOK_LBRACE)) return 0;
     rest[0] = '\0';
     while (C->L->tok != TOK_RBRACE && C->L->tok != TOK_EOF) {
-      char fname[64], ftype[64];
+      char fname[128], ftype[128];
       if (C->L->tok != TOK_IDENT) {
         errf(C, "field name");
         return 0;
@@ -1021,7 +1021,7 @@ static int parse_typedef(ParseCtx *C) {
       snprintf(buf, sizeof(buf), "%s", rest);
       for (tokp = strtok_r(buf, ",", &save); tokp; tokp = strtok_r(NULL, ",", &save)) {
         char *colon = strchr(tokp, ':');
-        char ft[64];
+        char ft[128];
         if (!colon) {
           errf(C, "bad field");
           return 0;
@@ -1045,7 +1045,7 @@ static int parse_typedef(ParseCtx *C) {
     return 1;
   }
   if (C->L->tok == TOK_KW_ARRAY) {
-    char elem[64];
+    char elem[128];
     unsigned count = 0;
     if (!lex_next(C)) return 0;
     if (!expect(C, TOK_LT)) return 0;
@@ -1103,7 +1103,7 @@ static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out,
     errf(C, "function name expected");
     return 0;
   }
-  snprintf(name_out, 64, "%s", C->L->ident);
+  snprintf(name_out, 128, "%s", C->L->ident);
     if (!lex_next(C)) return 0;
   if (!expect(C, TOK_LPAREN)) return 0;
   if (C->L->tok != TOK_RPAREN) {
@@ -1205,7 +1205,7 @@ static int parse_global_let(ParseCtx *C, OlGlobalSection sec, const char *custom
 
 static int parse_top_global(ParseCtx *C) {
   OlGlobalSection sec = OL_GSEC_DEFAULT;
-  char custom[64] = "";
+  char custom[128] = "";
   while (C->L->tok == TOK_AT) {
     if (!lex_next(C)) return 0;
     if (C->L->tok != TOK_IDENT) {
@@ -1248,7 +1248,7 @@ static int parse_extern_item(ParseCtx *C) {
   OlParam *params = NULL;
   size_t pc = 0;
   OlTypeRef ret;
-  char name[64];
+  char name[128];
   if (!expect(C, TOK_KW_EXTERN)) return 0;
   if (!expect(C, TOK_KW_FN)) return 0;
   if (!parse_fn_decl_header(C, name, &ret, &params, &pc)) return 0;

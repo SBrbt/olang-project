@@ -1,8 +1,17 @@
-# C toolchain — 构建与测试产物（由 Makefile clean 也可清除）
+# Build output
 bin/
 examples/out/
 
-# 常见杂项
+# Test artifacts
+tests/*.elf
+tests/fixtures/fail_tmp*.oobj
+tests/fixtures/alinker_smoke_out.bin
+
+# Stray compilation products
+*.elf
+*.oobj
+
+# Editor / OS clutter
 *~
 .DS_Store
 *.swp
