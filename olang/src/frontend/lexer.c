@@ -44,6 +44,7 @@ static int kw_tok(const char *s) {
   if (strcmp(s, "struct") == 0) return TOK_KW_STRUCT;
   if (strcmp(s, "array") == 0) return TOK_KW_ARRAY;
   if (strcmp(s, "cast") == 0) return TOK_KW_CAST;
+  if (strcmp(s, "reinterpret") == 0) return TOK_KW_REINTERPRET;
   if (strcmp(s, "load") == 0) return TOK_KW_LOAD;
   if (strcmp(s, "store") == 0) return TOK_KW_STORE;
   if (strcmp(s, "addr") == 0) return TOK_KW_ADDR;
@@ -56,11 +57,21 @@ static int kw_tok(const char *s) {
   if (strcmp(s, "true") == 0) return TOK_KW_TRUE;
   if (strcmp(s, "false") == 0) return TOK_KW_FALSE;
   if (strcmp(s, "bool") == 0) return TOK_KW_BOOL;
+  if (strcmp(s, "i8") == 0) return TOK_KW_I8;
+  if (strcmp(s, "i16") == 0) return TOK_KW_I16;
   if (strcmp(s, "i32") == 0) return TOK_KW_I32;
   if (strcmp(s, "i64") == 0) return TOK_KW_I64;
   if (strcmp(s, "u8") == 0) return TOK_KW_U8;
+  if (strcmp(s, "u16") == 0) return TOK_KW_U16;
   if (strcmp(s, "u32") == 0) return TOK_KW_U32;
   if (strcmp(s, "u64") == 0) return TOK_KW_U64;
+  if (strcmp(s, "f16") == 0) return TOK_KW_F16;
+  if (strcmp(s, "f32") == 0) return TOK_KW_F32;
+  if (strcmp(s, "f64") == 0) return TOK_KW_F64;
+  if (strcmp(s, "b8") == 0) return TOK_KW_B8;
+  if (strcmp(s, "b16") == 0) return TOK_KW_B16;
+  if (strcmp(s, "b32") == 0) return TOK_KW_B32;
+  if (strcmp(s, "b64") == 0) return TOK_KW_B64;
   if (strcmp(s, "ptr") == 0) return TOK_KW_PTR;
   if (strcmp(s, "void") == 0) return TOK_KW_VOID;
   return TOK_IDENT;
@@ -87,6 +98,8 @@ void ol_lexer_next(OlLexer *L) {
   L->str_val = NULL;
   L->str_len = 0;
   L->int_suffix = 0;
+  L->float_val = 0.0;
+  L->float_suffix = 0;
   L->lexer_error = 0;
   L->errmsg[0] = '\0';
   skip_ws(L);
@@ -115,8 +128,11 @@ void ol_lexer_next(OlLexer *L) {
   if (isdigit((unsigned char)c)) {
     uint64_t v = 0;
     int overflow = 0;
+    int is_non_decimal = 0;
+    size_t int_end;
     L->int_suffix = 0;
     if (c == '0' && L->pos + 1 < L->len && (L->src[L->pos + 1] == 'x' || L->src[L->pos + 1] == 'X')) {
+      is_non_decimal = 1;
       L->pos += 2;
       while (L->pos < L->len) {
         char h = L->src[L->pos];
@@ -131,6 +147,7 @@ void ol_lexer_next(OlLexer *L) {
       }
       L->int_val = (int64_t)v;
     } else if (c == '0' && L->pos + 1 < L->len && (L->src[L->pos + 1] == 'b' || L->src[L->pos + 1] == 'B')) {
+      is_non_decimal = 1;
       L->pos += 2;
       while (L->pos < L->len && (L->src[L->pos] == '0' || L->src[L->pos] == '1')) {
         unsigned dig = (unsigned)(L->src[L->pos] - '0');
@@ -140,6 +157,7 @@ void ol_lexer_next(OlLexer *L) {
       }
       L->int_val = (int64_t)v;
     } else if (c == '0' && L->pos + 1 < L->len && (L->src[L->pos + 1] == 'o' || L->src[L->pos + 1] == 'O')) {
+      is_non_decimal = 1;
       L->pos += 2;
       while (L->pos < L->len && L->src[L->pos] >= '0' && L->src[L->pos] <= '7') {
         unsigned dig = (unsigned)(L->src[L->pos] - '0');
@@ -157,10 +175,46 @@ void ol_lexer_next(OlLexer *L) {
       }
       L->int_val = (int64_t)v;
     }
+    int_end = L->pos;
+    /* Check for float literal: decimal digits followed by '.' + digit, or 'e'/'E' */
+    if (!is_non_decimal &&
+        ((L->pos < L->len && L->src[L->pos] == '.' && L->pos + 1 < L->len && isdigit((unsigned char)L->src[L->pos + 1])) ||
+         (L->pos < L->len && (L->src[L->pos] == 'e' || L->src[L->pos] == 'E')))) {
+      size_t fstart = int_end;
+      char *fend = NULL;
+      /* Rewind to start of integer part to let strtod parse the whole number */
+      while (fstart > 0 && (isdigit((unsigned char)L->src[fstart - 1]))) fstart--;
+      L->float_val = strtod(L->src + fstart, &fend);
+      if (fend && fend > L->src + int_end) {
+        L->pos = (size_t)(fend - L->src);
+      }
+      /* Check for float suffix: f16, f32, f64 */
+      {
+        size_t left = L->len - L->pos;
+        if (left >= 3 && L->src[L->pos] == 'f' && L->src[L->pos+1] == '6' && L->src[L->pos+2] == '4') {
+          size_t after = L->pos + 3;
+          if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->float_suffix = 0; }
+        } else if (left >= 3 && L->src[L->pos] == 'f' && L->src[L->pos+1] == '3' && L->src[L->pos+2] == '2') {
+          size_t after = L->pos + 3;
+          if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->float_suffix = 1; }
+        } else if (left >= 3 && L->src[L->pos] == 'f' && L->src[L->pos+1] == '1' && L->src[L->pos+2] == '6') {
+          size_t after = L->pos + 3;
+          if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->float_suffix = 2; }
+        }
+      }
+      L->tok = TOK_FLOAT;
+      return;
+    }
     {
-      /* suffix: i32, i64, u8, u32, u64 */
+      /* suffix: i8, i16, i32, i64, u8, u16, u32, u64 */
       size_t left = L->len - L->pos;
-      if (left >= 3 && L->src[L->pos] == 'i' && L->src[L->pos+1] == '3' && L->src[L->pos+2] == '2') {
+      if (left >= 2 && L->src[L->pos] == 'i' && L->src[L->pos+1] == '8') {
+        size_t after = L->pos + 2;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 6; }
+      } else if (left >= 3 && L->src[L->pos] == 'i' && L->src[L->pos+1] == '1' && L->src[L->pos+2] == '6') {
+        size_t after = L->pos + 3;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 7; }
+      } else if (left >= 3 && L->src[L->pos] == 'i' && L->src[L->pos+1] == '3' && L->src[L->pos+2] == '2') {
         size_t after = L->pos + 3;
         if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 1; }
       } else if (left >= 3 && L->src[L->pos] == 'i' && L->src[L->pos+1] == '6' && L->src[L->pos+2] == '4') {
@@ -169,27 +223,47 @@ void ol_lexer_next(OlLexer *L) {
       } else if (left >= 2 && L->src[L->pos] == 'u' && L->src[L->pos+1] == '8') {
         size_t after = L->pos + 2;
         if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 3; }
+      } else if (left >= 3 && L->src[L->pos] == 'u' && L->src[L->pos+1] == '1' && L->src[L->pos+2] == '6') {
+        size_t after = L->pos + 3;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 8; }
       } else if (left >= 3 && L->src[L->pos] == 'u' && L->src[L->pos+1] == '3' && L->src[L->pos+2] == '2') {
         size_t after = L->pos + 3;
         if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 4; }
       } else if (left >= 3 && L->src[L->pos] == 'u' && L->src[L->pos+1] == '6' && L->src[L->pos+2] == '4') {
         size_t after = L->pos + 3;
         if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 5; }
+      } else if (left >= 2 && L->src[L->pos] == 'b' && L->src[L->pos+1] == '8') {
+        size_t after = L->pos + 2;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 9; }
+      } else if (left >= 3 && L->src[L->pos] == 'b' && L->src[L->pos+1] == '1' && L->src[L->pos+2] == '6') {
+        size_t after = L->pos + 3;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 10; }
+      } else if (left >= 3 && L->src[L->pos] == 'b' && L->src[L->pos+1] == '3' && L->src[L->pos+2] == '2') {
+        size_t after = L->pos + 3;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 11; }
+      } else if (left >= 3 && L->src[L->pos] == 'b' && L->src[L->pos+1] == '6' && L->src[L->pos+2] == '4') {
+        size_t after = L->pos + 3;
+        if (after >= L->len || !(isalnum((unsigned char)L->src[after]) || L->src[after] == '_')) { L->pos = after; L->int_suffix = 12; }
       }
     }
     /* Validate range based on suffix */
     if (!overflow) {
-      if (L->int_suffix == 5) { /* u64: full 64-bit range allowed */
-        /* No additional check needed, v is already in 0..UINT64_MAX */
-      } else if (L->int_suffix == 4) { /* u32: 0..UINT32_MAX */
+      if (L->int_suffix == 5 || L->int_suffix == 12) { /* u64 / b64 */
+      } else if (L->int_suffix == 4 || L->int_suffix == 11) { /* u32 / b32 */
         if (v > UINT32_MAX) overflow = 1;
-      } else if (L->int_suffix == 3) { /* u8: 0..255 */
+      } else if (L->int_suffix == 8 || L->int_suffix == 10) { /* u16 / b16 */
+        if (v > 65535) overflow = 1;
+      } else if (L->int_suffix == 3 || L->int_suffix == 9) { /* u8 / b8 */
         if (v > 255) overflow = 1;
-      } else if (L->int_suffix == 2) { /* i64: 0..LLONG_MAX (no negative literals yet) */
+      } else if (L->int_suffix == 2) { /* i64 */
         if (v > (uint64_t)LLONG_MAX) overflow = 1;
-      } else if (L->int_suffix == 1) { /* i32: 0..INT32_MAX */
+      } else if (L->int_suffix == 1) { /* i32 */
         if (v > INT32_MAX) overflow = 1;
-      } else { /* no suffix: default i32 range for large values */
+      } else if (L->int_suffix == 7) { /* i16 */
+        if (v > 32767) overflow = 1;
+      } else if (L->int_suffix == 6) { /* i8 */
+        if (v > 127) overflow = 1;
+      } else { /* no suffix: default i32 */
         if (v > INT32_MAX) overflow = 1;
       }
     }
@@ -308,14 +382,20 @@ void ol_lexer_next(OlLexer *L) {
       L->tok = TOK_DOT;
       return;
     case '<':
-      if (L->pos < L->len && L->src[L->pos] == '=') {
+      if (L->pos < L->len && L->src[L->pos] == '<') {
+        L->pos++;
+        L->tok = TOK_SHL;
+      } else if (L->pos < L->len && L->src[L->pos] == '=') {
         L->pos++;
         L->tok = TOK_LE;
       } else
         L->tok = TOK_LT;
       return;
     case '>':
-      if (L->pos < L->len && L->src[L->pos] == '=') {
+      if (L->pos < L->len && L->src[L->pos] == '>') {
+        L->pos++;
+        L->tok = TOK_SHR;
+      } else if (L->pos < L->len && L->src[L->pos] == '=') {
         L->pos++;
         L->tok = TOK_GE;
       } else
@@ -341,7 +421,7 @@ void ol_lexer_next(OlLexer *L) {
         L->pos++;
         L->tok = TOK_AMPAMP;
       } else {
-        L->tok = TOK_EOF;
+        L->tok = TOK_AMP;
       }
       return;
     case '|':
@@ -349,8 +429,14 @@ void ol_lexer_next(OlLexer *L) {
         L->pos++;
         L->tok = TOK_PIPEPIPE;
       } else {
-        L->tok = TOK_EOF;
+        L->tok = TOK_PIPE;
       }
+      return;
+    case '^':
+      L->tok = TOK_CARET;
+      return;
+    case '~':
+      L->tok = TOK_TILDE;
       return;
     case '+':
       L->tok = TOK_PLUS;

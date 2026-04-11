@@ -6,6 +6,10 @@
 
 30+ 个可运行示例。
 
+### POSIX 封装（`libposix.kasm`）
+
+共用的 `extern fn posix_*` 声明在 [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol)。示例里用 `#include "posix_abi.ol"`；`examples/olc` 会传入 `-I` 以解析该路径。
+
 ### 快速运行
 
 ```bash
@@ -75,7 +79,7 @@ bash examples/olc -o examples/out/multi.elf \
 
 ### 边界测试
 
-位于 `tests/`：
+位于 `tests/olang/`（`make check` 里会经 `tests/olang/run_programs_olc.sh` 编译并运行）：
 
 - `olang_aggregate_copy.ol` — 聚合类型值拷贝
 - `olang_nested_struct.ol` — 嵌套结构体访问

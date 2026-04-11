@@ -1,6 +1,3 @@
-extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
-extern fn exit(code: i32);
-
 type Int3 = array<i32, 3>;
 
 extern fn main() -> i32 {

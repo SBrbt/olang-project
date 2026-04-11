@@ -25,6 +25,12 @@ static void free_expr(OlExpr *e) {
     case OL_EX_CAST:
       free_expr(e->u.cast_.inner);
       break;
+    case OL_EX_REINTERPRET:
+      free_expr(e->u.reinterpret_.inner);
+      break;
+    case OL_EX_BNOT:
+      free_expr(e->u.bnot.inner);
+      break;
     case OL_EX_LOAD:
       free_expr(e->u.load.ptr);
       break;
@@ -160,11 +166,13 @@ int ol_program_add_typedef_struct_field(OlProgram *p, size_t type_idx, const cha
   if (type_idx >= p->typedef_count) return 0;
   t = &p->typedefs[type_idx];
   if (t->kind != OL_TYPEDEF_STRUCT) return 0;
-  if (strcmp(field_type, "bool") == 0 || strcmp(field_type, "u8") == 0)
+  if (strcmp(field_type, "bool") == 0 || strcmp(field_type, "u8") == 0 || strcmp(field_type, "i8") == 0 || strcmp(field_type, "b8") == 0)
     sz = 1;
-  else if (strcmp(field_type, "i32") == 0 || strcmp(field_type, "u32") == 0)
+  else if (strcmp(field_type, "u16") == 0 || strcmp(field_type, "i16") == 0 || strcmp(field_type, "f16") == 0 || strcmp(field_type, "b16") == 0)
+    sz = 2;
+  else if (strcmp(field_type, "i32") == 0 || strcmp(field_type, "u32") == 0 || strcmp(field_type, "f32") == 0 || strcmp(field_type, "b32") == 0)
     sz = 4;
-  else if (strcmp(field_type, "i64") == 0 || strcmp(field_type, "u64") == 0 || strcmp(field_type, "ptr") == 0)
+  else if (strcmp(field_type, "i64") == 0 || strcmp(field_type, "u64") == 0 || strcmp(field_type, "f64") == 0 || strcmp(field_type, "b64") == 0 || strcmp(field_type, "ptr") == 0)
     sz = 8;
   else if (ol_program_find_typedef(p, field_type) >= 0) {
     int k = ol_program_find_typedef(p, field_type);
@@ -187,11 +195,13 @@ int ol_program_add_typedef_array(OlProgram *p, const char *name, const char *ele
   OlTypeDef *next;
   uint32_t elem_sz = 8;
   if (ol_program_find_typedef(p, name) >= 0) return 0;
-  if (strcmp(elem_type, "bool") == 0 || strcmp(elem_type, "u8") == 0)
+  if (strcmp(elem_type, "bool") == 0 || strcmp(elem_type, "u8") == 0 || strcmp(elem_type, "i8") == 0 || strcmp(elem_type, "b8") == 0)
     elem_sz = 1;
-  else if (strcmp(elem_type, "i32") == 0 || strcmp(elem_type, "u32") == 0)
+  else if (strcmp(elem_type, "u16") == 0 || strcmp(elem_type, "i16") == 0 || strcmp(elem_type, "f16") == 0 || strcmp(elem_type, "b16") == 0)
+    elem_sz = 2;
+  else if (strcmp(elem_type, "i32") == 0 || strcmp(elem_type, "u32") == 0 || strcmp(elem_type, "f32") == 0 || strcmp(elem_type, "b32") == 0)
     elem_sz = 4;
-  else if (strcmp(elem_type, "i64") == 0 || strcmp(elem_type, "u64") == 0 || strcmp(elem_type, "ptr") == 0)
+  else if (strcmp(elem_type, "i64") == 0 || strcmp(elem_type, "u64") == 0 || strcmp(elem_type, "f64") == 0 || strcmp(elem_type, "b64") == 0 || strcmp(elem_type, "ptr") == 0)
     elem_sz = 8;
   else if (ol_program_find_typedef(p, elem_type) >= 0) {
     int k = ol_program_find_typedef(p, elem_type);

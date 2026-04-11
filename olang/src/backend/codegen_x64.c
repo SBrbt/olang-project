@@ -10,7 +10,15 @@
 #include <string.h>
 
 #define FRAME_SLOTS 256
-#define FRAME_BYTES ((FRAME_SLOTS + 8) * 8)
+
+/* Bytes below saved rbx: slot s lives at rbp-8*(s+2); need sub rsp >= 8*num_slots, 16-byte aligned. */
+static int32_t frame_bytes_for_slot_count(int num_slots) {
+  if (num_slots <= 0) return 0;
+  {
+    uint64_t need = 8ull * (uint64_t)num_slots;
+    return (int32_t)((need + 15ull) & ~15ull);
+  }
+}
 
 typedef struct CG {
   OlProgram *p;
@@ -43,11 +51,11 @@ typedef struct CG {
   size_t lbl_pos[64];
   int lbl_set[64];
   int nlbl;
-  int emitted_ret_epilogue;
   int failed;
   int loop_head[16];
   int loop_done[16];
   int loop_depth;
+  int fn_exit_lbl; /* unified return target during gen_function */
 } CG;
 
 static uint32_t type_size_bytes(const OlProgram *p, const OlTypeRef *t) {
@@ -56,12 +64,23 @@ static uint32_t type_size_bytes(const OlProgram *p, const OlTypeRef *t) {
       return 0;
     case OL_TY_BOOL:
     case OL_TY_U8:
+    case OL_TY_I8:
+    case OL_TY_B8:
       return 1u;
+    case OL_TY_U16:
+    case OL_TY_I16:
+    case OL_TY_F16:
+    case OL_TY_B16:
+      return 2u;
     case OL_TY_I32:
     case OL_TY_U32:
+    case OL_TY_F32:
+    case OL_TY_B32:
       return 4u;
     case OL_TY_I64:
     case OL_TY_U64:
+    case OL_TY_F64:
+    case OL_TY_B64:
     case OL_TY_PTR:
       return 8u;
     case OL_TY_ALIAS: {
@@ -75,8 +94,27 @@ static uint32_t type_size_bytes(const OlProgram *p, const OlTypeRef *t) {
 
 static int type_is_u32_like(const OlTypeRef *t) { return t->kind == OL_TY_U32; }
 static int type_is_i32_like(const OlTypeRef *t) { return t->kind == OL_TY_I32; }
-static int type_is_byte_like(const OlTypeRef *t) { return t->kind == OL_TY_BOOL || t->kind == OL_TY_U8; }
-static int type_is_unsigned_like(const OlTypeRef *t) { return t->kind == OL_TY_U8 || t->kind == OL_TY_U32 || t->kind == OL_TY_U64; }
+static int type_is_byte_like(const OlTypeRef *t) { return t->kind == OL_TY_BOOL || t->kind == OL_TY_U8 || t->kind == OL_TY_I8 || t->kind == OL_TY_B8; }
+static int type_is_word_like(const OlTypeRef *t) { return t->kind == OL_TY_U16 || t->kind == OL_TY_I16 || t->kind == OL_TY_B16; }
+static int type_is_unsigned_like(const OlTypeRef *t) {
+  return t->kind == OL_TY_U8 || t->kind == OL_TY_U16 || t->kind == OL_TY_U32 || t->kind == OL_TY_U64 ||
+         t->kind == OL_TY_B8 || t->kind == OL_TY_B16 || t->kind == OL_TY_B32 || t->kind == OL_TY_B64;
+}
+static int type_is_float(const OlTypeRef *t) { return t->kind == OL_TY_F16 || t->kind == OL_TY_F32 || t->kind == OL_TY_F64; }
+
+static uint16_t f32_to_f16_bits(float fval) {
+  union { float f; uint32_t i; } u;
+  uint32_t bits, sign, exp, mant;
+  u.f = fval;
+  bits = u.i;
+  sign = (bits >> 16) & 0x8000u;
+  exp = (bits >> 23) & 0xffu;
+  mant = bits & 0x7fffffu;
+  if (exp == 0xff) return (uint16_t)(sign | 0x7c00u | (mant ? 0x200u : 0u));
+  if (exp > 142) return (uint16_t)(sign | 0x7c00u);
+  if (exp < 113) return (uint16_t)sign;
+  return (uint16_t)(sign | (uint16_t)((exp - 112u) << 10) | (uint16_t)(mant >> 13));
+}
 
 static void cg_err(CG *g, const char *m) { snprintf(g->err, sizeof(g->err), "%s", m); }
 
@@ -106,15 +144,19 @@ static void tx_copy(CG *g, const uint8_t *p, size_t n) {
 
 static int emit_load_at_rax(CG *g, uint32_t sz) {
   if (sz == 1u) {
-    tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x00}, 3);
+    tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x00}, 3); /* movzx eax, byte [rax] */
     return 1;
   }
-  if (sz == 8u) {
-    tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x00}, 3);
+  if (sz == 2u) {
+    tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x00}, 3); /* movzx eax, word [rax] */
     return 1;
   }
   if (sz == 4u) {
-    tx_copy(g, (uint8_t[]){0x8b, 0x00}, 2);
+    tx_copy(g, (uint8_t[]){0x8b, 0x00}, 2); /* mov eax, [rax] */
+    return 1;
+  }
+  if (sz == 8u) {
+    tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x00}, 3); /* mov rax, [rax] */
     return 1;
   }
   return 0;
@@ -262,10 +304,21 @@ static void emit_mov_eax_zext8_from_slot(CG *g, int slot) {
   }
 }
 
-/* i32 locals live in 4-byte stack slots; a 64-bit load can pick up garbage above the value. */
+static void emit_mov_eax_zext16_from_slot(CG *g, int slot) {
+  int32_t d = slot_disp(slot);
+  if (d >= -128 && d <= 127)
+    tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x45, (uint8_t)(uint8_t)d}, 4); /* movzx eax, word [rbp+d] */
+  else {
+    tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x85}, 3);
+    tx_copy(g, (uint8_t *)&d, 4);
+  }
+}
+
 static void emit_branch_cond_to_rax(CG *g, const OlExpr *cond, int slot) {
   if (cond && type_is_byte_like(&cond->ty))
     emit_mov_eax_zext8_from_slot(g, slot);
+  else if (cond && type_is_word_like(&cond->ty))
+    emit_mov_eax_zext16_from_slot(g, slot);
   else if (cond && (type_is_i32_like(&cond->ty) || type_is_u32_like(&cond->ty)))
     emit_mov_eax_from_slot(g, slot);
   else
@@ -293,11 +346,13 @@ static void emit_lea_rax_rip(CG *g, const char *sym) {
 static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz) {
   size_t reloc_at;
   if (sz == 1u) {
-    tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x05}, 3);
-  } else if (sz == 8u) {
-    tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x05}, 3);
+    tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x05}, 3); /* movzx eax, byte [rip+d] */
+  } else if (sz == 2u) {
+    tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x05}, 3); /* movzx eax, word [rip+d] */
   } else if (sz == 4u) {
-    tx_copy(g, (uint8_t[]){0x8b, 0x05}, 2);
+    tx_copy(g, (uint8_t[]){0x8b, 0x05}, 2); /* mov eax, [rip+d] */
+  } else if (sz == 8u) {
+    tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x05}, 3); /* mov rax, [rip+d] */
   } else {
     CG_FAIL(g, "global load size");
     return;
@@ -310,11 +365,13 @@ static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz) {
 static void emit_mov_to_global(CG *g, const char *sym, uint32_t sz) {
   size_t reloc_at;
   if (sz == 1u) {
-    tx_copy(g, (uint8_t[]){0x88, 0x05}, 2);
-  } else if (sz == 8u) {
-    tx_copy(g, (uint8_t[]){0x48, 0x89, 0x05}, 3);
+    tx_copy(g, (uint8_t[]){0x88, 0x05}, 2); /* mov byte [rip+d], al */
+  } else if (sz == 2u) {
+    tx_copy(g, (uint8_t[]){0x66, 0x89, 0x05}, 3); /* mov word [rip+d], ax */
   } else if (sz == 4u) {
-    tx_copy(g, (uint8_t[]){0x89, 0x05}, 2);
+    tx_copy(g, (uint8_t[]){0x89, 0x05}, 2); /* mov dword [rip+d], eax */
+  } else if (sz == 8u) {
+    tx_copy(g, (uint8_t[]){0x48, 0x89, 0x05}, 3); /* mov qword [rip+d], rax */
   } else {
     CG_FAIL(g, "global store size");
     return;
@@ -332,21 +389,27 @@ static void emit_call_sym(CG *g, const char *sym) {
   if (!x64_add_call_reloc(g->obj, reloc_at, sym)) CG_FAIL(g, "call reloc oom");
 }
 
-static void emit_prologue(CG *g) {
+/* Emits push rbp; mov rbp,rsp; push rbx; sub rsp, imm32 (imm32 patched later). Returns offset of imm32 in g->tx. */
+static size_t emit_prologue_frame_placeholder(CG *g) {
   tx_copy(g, (uint8_t[]){0x55, 0x48, 0x89, 0xe5}, 4);
   txb(g, 0x53);
+  tx_copy(g, (uint8_t[]){0x48, 0x81, 0xec}, 3);
   {
-    /* SUB rsp, imm32 subtracts; use positive FRAME_BYTES (not negated). */
-    int32_t frame = (int32_t)FRAME_BYTES;
-    tx_copy(g, (uint8_t[]){0x48, 0x81, 0xec}, 3);
-    tx_copy(g, (uint8_t *)&frame, 4);
+    size_t imm_off = g->tx_len;
+    int32_t z = 0;
+    tx_copy(g, (uint8_t *)&z, 4);
+    return imm_off;
   }
 }
 
-static void emit_epilogue(CG *g) {
-  int32_t addv = (int32_t)FRAME_BYTES;
+static void patch_u32_at(CG *g, size_t off, int32_t v) {
+  if (off + 4 > g->tx_len) return;
+  memcpy(g->tx + off, &v, 4);
+}
+
+static void emit_epilogue(CG *g, int32_t frame_bytes) {
   tx_copy(g, (uint8_t[]){0x48, 0x81, 0xc4}, 3);
-  tx_copy(g, (uint8_t *)&addv, 4);
+  tx_copy(g, (uint8_t *)&frame_bytes, 4);
   txb(g, 0x5b);
   txb(g, 0x5d);
   txb(g, 0xc3);
@@ -428,6 +491,23 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_rax_imm64(g, e->u.int_.int_val);
       emit_mov_rbp_r64(g, out, 0);
       return out;
+    case OL_EX_FLOAT: {
+      out = alloc_slot(g);
+      if (e->ty.kind == OL_TY_F64) {
+        union { double d; int64_t i; } u;
+        u.d = e->u.float_.float_val;
+        emit_mov_rax_imm64(g, u.i);
+      } else if (e->ty.kind == OL_TY_F32) {
+        union { float f; int32_t i; } u;
+        u.f = (float)e->u.float_.float_val;
+        emit_mov_rax_imm64(g, (int64_t)(uint32_t)u.i);
+      } else {
+        uint16_t h = f32_to_f16_bits((float)e->u.float_.float_val);
+        emit_mov_rax_imm64(g, (int64_t)h);
+      }
+      emit_mov_rbp_r64(g, out, 0);
+      return out;
+    }
     case OL_EX_BOOL:
       out = alloc_slot(g);
       emit_mov_rax_imm64(g, e->u.bool_val ? 1 : 0);
@@ -441,12 +521,46 @@ static int gen_expr(CG *g, OlExpr *e) {
     case OL_EX_NEG: {
       sl = gen_expr(g, e->u.neg.inner);
       if (sl < 0) return -1;
+      if (type_is_float(&e->ty)) {
+        int32_t d = slot_disp(sl);
+        out = alloc_slot(g);
+        if (e->ty.kind == OL_TY_F64) {
+          /* movsd xmm0, [rbp+d] */
+          if (d >= -128 && d <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&d, 4); }
+          /* XOR sign bit: mov rax, 0x8000000000000000; movq xmm1, rax; xorpd xmm0, xmm1 */
+          { uint8_t imm[10] = {0x48,0xb8}; int64_t sb = (int64_t)0x8000000000000000ull; memcpy(imm+2,&sb,8); tx_copy(g,imm,10); }
+          tx_copy(g, (uint8_t[]){0x66, 0x48, 0x0f, 0x6e, 0xc8}, 5); /* movq xmm1, rax */
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x57, 0xc1}, 4); /* xorpd xmm0, xmm1 */
+          /* movsd [rbp+out], xmm0 */
+          { int32_t od = slot_disp(out);
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); } }
+        } else {
+          /* f32 (and f16 stored as f32-width in slot): xorps with sign bit */
+          if (d >= -128 && d <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&d, 4); }
+          emit_mov_rax_imm64(g, 0x80000000LL);
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x6e, 0xc8}, 4); /* movd xmm1, eax */
+          tx_copy(g, (uint8_t[]){0x0f, 0x57, 0xc1}, 3); /* xorps xmm0, xmm1 */
+          { int32_t od = slot_disp(out);
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); } }
+        }
+        return out;
+      }
       emit_mov_r64_rbp(g, 0, sl);
       if (e->ty.kind == OL_TY_I32) {
-        tx_copy(g, (uint8_t[]){0xf7, 0xd8}, 2);
-        tx_copy(g, (uint8_t[]){0x48, 0x63, 0xc0}, 3);
+        tx_copy(g, (uint8_t[]){0xf7, 0xd8}, 2); /* neg eax */
+        tx_copy(g, (uint8_t[]){0x48, 0x63, 0xc0}, 3); /* movsxd rax, eax */
+      } else if (e->ty.kind == OL_TY_I16) {
+        tx_copy(g, (uint8_t[]){0x66, 0xf7, 0xd8}, 3); /* neg ax */
+        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0xc0}, 4); /* movsx rax, ax */
+      } else if (e->ty.kind == OL_TY_I8) {
+        tx_copy(g, (uint8_t[]){0xf6, 0xd8}, 2); /* neg al */
+        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbe, 0xc0}, 4); /* movsx rax, al */
       } else {
-        tx_copy(g, (uint8_t[]){0x48, 0xf7, 0xd8}, 3);
+        tx_copy(g, (uint8_t[]){0x48, 0xf7, 0xd8}, 3); /* neg rax */
       }
       out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
@@ -459,6 +573,15 @@ static int gen_expr(CG *g, OlExpr *e) {
       tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3); /* test rax, rax */
       tx_copy(g, (uint8_t[]){0x0f, 0x94, 0xc0}, 3); /* sete al */
       tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xb6, 0xc0}, 4); /* movzx rax, al */
+      out = alloc_slot(g);
+      emit_mov_rbp_r64(g, out, 0);
+      return out;
+    }
+    case OL_EX_BNOT: {
+      sl = gen_expr(g, e->u.bnot.inner);
+      if (sl < 0) return -1;
+      emit_mov_r64_rbp(g, 0, sl);
+      tx_copy(g, (uint8_t[]){0x48, 0xf7, 0xd0}, 3); /* not rax */
       out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
       return out;
@@ -497,9 +620,79 @@ static int gen_expr(CG *g, OlExpr *e) {
     }
     case OL_EX_BINARY: {
       int use_unsigned = type_is_unsigned_like(&e->u.binary.left->ty);
+      int is_flt = type_is_float(&e->u.binary.left->ty);
       sl = gen_expr(g, e->u.binary.left);
       sr = gen_expr(g, e->u.binary.right);
       if (sl < 0 || sr < 0) return -1;
+      if (is_flt) {
+        /* SSE float binary ops: load both operands into xmm0/xmm1 */
+        int32_t dl = slot_disp(sl), dr = slot_disp(sr);
+        int is_d = (e->u.binary.left->ty.kind == OL_TY_F64);
+        /* Load left into xmm0 */
+        if (is_d) {
+          if (dl >= -128 && dl <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)dl}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&dl, 4); }
+        } else {
+          if (dl >= -128 && dl <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)dl}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&dl, 4); }
+        }
+        /* Load right into xmm1 */
+        if (is_d) {
+          if (dr >= -128 && dr <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x4d, (uint8_t)(int8_t)dr}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x8d}, 4); tx_copy(g, (uint8_t*)&dr, 4); }
+        } else {
+          if (dr >= -128 && dr <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x4d, (uint8_t)(int8_t)dr}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x8d}, 4); tx_copy(g, (uint8_t*)&dr, 4); }
+        }
+        switch (e->u.binary.op) {
+          case OL_BIN_ADD:
+            tx_copy(g, is_d ? (uint8_t[]){0xf2, 0x0f, 0x58, 0xc1} : (uint8_t[]){0xf3, 0x0f, 0x58, 0xc1}, 4);
+            break;
+          case OL_BIN_SUB:
+            tx_copy(g, is_d ? (uint8_t[]){0xf2, 0x0f, 0x5c, 0xc1} : (uint8_t[]){0xf3, 0x0f, 0x5c, 0xc1}, 4);
+            break;
+          case OL_BIN_MUL:
+            tx_copy(g, is_d ? (uint8_t[]){0xf2, 0x0f, 0x59, 0xc1} : (uint8_t[]){0xf3, 0x0f, 0x59, 0xc1}, 4);
+            break;
+          case OL_BIN_DIV:
+            tx_copy(g, is_d ? (uint8_t[]){0xf2, 0x0f, 0x5e, 0xc1} : (uint8_t[]){0xf3, 0x0f, 0x5e, 0xc1}, 4);
+            break;
+          case OL_BIN_EQ: case OL_BIN_NE: case OL_BIN_LT: case OL_BIN_GT: case OL_BIN_LE: case OL_BIN_GE: {
+            /* ucomisd/ucomiss xmm0, xmm1 */
+            if (is_d) tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x2e, 0xc1}, 4);
+            else tx_copy(g, (uint8_t[]){0x0f, 0x2e, 0xc1}, 3);
+            /* Select setcc based on operation (unsigned branch for unordered float comparison) */
+            switch (e->u.binary.op) {
+              case OL_BIN_EQ: tx_copy(g, (uint8_t[]){0x0f, 0x94, 0xc0}, 3); break; /* sete al */
+              case OL_BIN_NE: tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3); break; /* setne al */
+              case OL_BIN_LT: tx_copy(g, (uint8_t[]){0x0f, 0x92, 0xc0}, 3); break; /* setb al */
+              case OL_BIN_GT: tx_copy(g, (uint8_t[]){0x0f, 0x97, 0xc0}, 3); break; /* seta al */
+              case OL_BIN_LE: tx_copy(g, (uint8_t[]){0x0f, 0x96, 0xc0}, 3); break; /* setbe al */
+              case OL_BIN_GE: tx_copy(g, (uint8_t[]){0x0f, 0x93, 0xc0}, 3); break; /* setae al */
+              default: break;
+            }
+            tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3); /* movzx eax, al */
+            out = alloc_slot(g);
+            emit_mov_rbp_r64(g, out, 0);
+            return out;
+          }
+          default:
+            cg_err(g, "bad float binop");
+            return -1;
+        }
+        /* Store xmm0 result to output slot */
+        out = alloc_slot(g);
+        { int32_t od = slot_disp(out);
+          if (is_d) {
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+          } else {
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+          }
+        }
+        return out;
+      }
       emit_mov_gpr_from_slot(g, 0, sl);
       emit_mov_gpr_from_slot(g, 3, sr);
       switch (e->u.binary.op) {
@@ -553,18 +746,35 @@ static int gen_expr(CG *g, OlExpr *e) {
           tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3);
           break;
         case OL_BIN_AND:
-          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3); /* test rax, rax */
-          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3); /* setne al */
-          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xdb}, 3); /* test rbx, rbx */
-          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc3}, 3); /* setne bl */
-          tx_copy(g, (uint8_t[]){0x20, 0xd8}, 2);       /* and al, bl */
-          tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3); /* movzx eax, al */
+          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3);
+          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3);
+          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xdb}, 3);
+          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc3}, 3);
+          tx_copy(g, (uint8_t[]){0x20, 0xd8}, 2);
+          tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3);
           break;
         case OL_BIN_OR:
+          tx_copy(g, (uint8_t[]){0x48, 0x09, 0xd8}, 3);
+          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3);
+          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3);
+          tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3);
+          break;
+        case OL_BIN_BAND:
+          tx_copy(g, (uint8_t[]){0x48, 0x21, 0xd8}, 3); /* and rax, rbx */
+          break;
+        case OL_BIN_BOR:
           tx_copy(g, (uint8_t[]){0x48, 0x09, 0xd8}, 3); /* or rax, rbx */
-          tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3); /* test rax, rax */
-          tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3); /* setne al */
-          tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3); /* movzx eax, al */
+          break;
+        case OL_BIN_BXOR:
+          tx_copy(g, (uint8_t[]){0x48, 0x31, 0xd8}, 3); /* xor rax, rbx */
+          break;
+        case OL_BIN_SHL:
+          tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd9}, 3); /* mov rcx, rbx */
+          tx_copy(g, (uint8_t[]){0x48, 0xd3, 0xe0}, 3); /* shl rax, cl */
+          break;
+        case OL_BIN_SHR:
+          tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd9}, 3); /* mov rcx, rbx */
+          tx_copy(g, (uint8_t[]){0x48, 0xd3, 0xe8}, 3); /* shr rax, cl */
           break;
         default:
           cg_err(g, "bad binop");
@@ -626,37 +836,155 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_rbp_r64(g, out, 0);
       return out;
     }
+    case OL_EX_REINTERPRET: {
+      sl = gen_expr(g, e->u.reinterpret_.inner);
+      return sl;
+    }
     case OL_EX_CAST: {
+      OlTyKind from_k = e->u.cast_.inner->ty.kind;
+      OlTyKind to_k = e->ty.kind;
+      int from_flt = type_is_float(&e->u.cast_.inner->ty);
+      int to_flt = type_is_float(&e->ty);
       sl = gen_expr(g, e->u.cast_.inner);
       if (sl < 0) return -1;
+      out = alloc_slot(g);
+      if (from_flt && to_flt) {
+        /* float-to-float conversion */
+        int32_t ds = slot_disp(sl), od = slot_disp(out);
+        if (from_k == OL_TY_F32 && to_k == OL_TY_F64) {
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x5a, 0xc0}, 4); /* cvtss2sd xmm0, xmm0 */
+          if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+        } else if (from_k == OL_TY_F64 && to_k == OL_TY_F32) {
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x5a, 0xc0}, 4); /* cvtsd2ss xmm0, xmm0 */
+          if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+        } else if (from_k == OL_TY_F16 && to_k == OL_TY_F32) {
+          /* f16→f32: load f16 bits to r12, call __olrt_f16_to_f32, store f32 bits from rax */
+          emit_mov_r64_rbp(g, 0, sl);
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f16_to_f32");
+          /* rax now has f32 bits; move to xmm0 then store */
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x6e, 0xc0}, 4); /* movd xmm0, eax */
+          if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+        } else if (from_k == OL_TY_F32 && to_k == OL_TY_F16) {
+          /* f32→f16: load f32 bits to r12, call __olrt_f32_to_f16, rax has f16 bits */
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x7e, 0xc0}, 4); /* movd eax, xmm0 */
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f32_to_f16");
+          emit_mov_rbp_r64(g, out, 0);
+        } else if (from_k == OL_TY_F16 && to_k == OL_TY_F64) {
+          /* f16→f64: f16→f32 via olrt, then cvtss2sd */
+          emit_mov_r64_rbp(g, 0, sl);
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f16_to_f32");
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x6e, 0xc0}, 4); /* movd xmm0, eax */
+          tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x5a, 0xc0}, 4); /* cvtss2sd xmm0, xmm0 */
+          if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); }
+        } else if (from_k == OL_TY_F64 && to_k == OL_TY_F16) {
+          /* f64→f16: cvtsd2ss then f32→f16 via olrt */
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x5a, 0xc0}, 4); /* cvtsd2ss xmm0, xmm0 */
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x7e, 0xc0}, 4); /* movd eax, xmm0 */
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f32_to_f16");
+          emit_mov_rbp_r64(g, out, 0);
+        } else {
+          emit_mov_r64_rbp(g, 0, sl);
+          emit_mov_rbp_r64(g, out, 0);
+        }
+        return out;
+      }
+      if (!from_flt && to_flt) {
+        /* int-to-float */
+        emit_mov_r64_rbp(g, 0, sl);
+        if (to_k == OL_TY_F64) {
+          tx_copy(g, (uint8_t[]){0xf2, 0x48, 0x0f, 0x2a, 0xc0}, 5); /* cvtsi2sd xmm0, rax */
+          { int32_t od = slot_disp(out);
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); } }
+        } else if (to_k == OL_TY_F16) {
+          /* int→f16: int→f32 via cvtsi2ss, then f32→f16 via olrt */
+          tx_copy(g, (uint8_t[]){0xf3, 0x48, 0x0f, 0x2a, 0xc0}, 5); /* cvtsi2ss xmm0, rax */
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x7e, 0xc0}, 4); /* movd eax, xmm0 */
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f32_to_f16");
+          emit_mov_rbp_r64(g, out, 0);
+        } else {
+          tx_copy(g, (uint8_t[]){0xf3, 0x48, 0x0f, 0x2a, 0xc0}, 5); /* cvtsi2ss xmm0, rax */
+          { int32_t od = slot_disp(out);
+            if (od >= -128 && od <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+            else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4); tx_copy(g, (uint8_t*)&od, 4); } }
+        }
+        return out;
+      }
+      if (from_flt && !to_flt) {
+        /* float-to-int */
+        int32_t ds = slot_disp(sl);
+        if (from_k == OL_TY_F64) {
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0xf2, 0x48, 0x0f, 0x2c, 0xc0}, 5); /* cvttsd2si rax, xmm0 */
+        } else if (from_k == OL_TY_F16) {
+          /* f16→int: f16→f32 via olrt, then cvttss2si */
+          emit_mov_r64_rbp(g, 0, sl);
+          tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc4}, 3); /* mov r12, rax */
+          emit_call_sym(g, "__olrt_f16_to_f32");
+          tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x6e, 0xc0}, 4); /* movd xmm0, eax */
+          tx_copy(g, (uint8_t[]){0xf3, 0x48, 0x0f, 0x2c, 0xc0}, 5); /* cvttss2si rax, xmm0 */
+        } else {
+          if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+          else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&ds, 4); }
+          tx_copy(g, (uint8_t[]){0xf3, 0x48, 0x0f, 0x2c, 0xc0}, 5); /* cvttss2si rax, xmm0 */
+        }
+        emit_mov_rbp_r64(g, out, 0);
+        return out;
+      }
+      /* int/ptr-to-int/ptr cast (existing logic) */
       emit_mov_r64_rbp(g, 0, sl);
-      if (e->ty.kind == OL_TY_BOOL) {
+      if (to_k == OL_TY_BOOL) {
         tx_copy(g, (uint8_t[]){0x48, 0x85, 0xc0}, 3);
         tx_copy(g, (uint8_t[]){0x0f, 0x95, 0xc0}, 3);
         tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xb6, 0xc0}, 4);
-      } else if (e->ty.kind == OL_TY_U8) {
+      } else if (to_k == OL_TY_U8 || to_k == OL_TY_I8) {
         tx_copy(g, (uint8_t[]){0x25, 0xff, 0x00, 0x00, 0x00}, 5);
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_I64 && e->ty.kind == OL_TY_I32) {
-        tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2);
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_U64 && e->ty.kind == OL_TY_U32) {
-        tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2);
-      } else if ((e->u.cast_.inner->ty.kind == OL_TY_I32 || e->u.cast_.inner->ty.kind == OL_TY_U32 || type_is_byte_like(&e->u.cast_.inner->ty)) &&
-                 e->ty.kind == OL_TY_U64) {
-        tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2);
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_I32 && e->ty.kind == OL_TY_I64) {
+      } else if (to_k == OL_TY_U16 || to_k == OL_TY_I16 || to_k == OL_TY_B16) {
+        tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0xc0}, 3); /* movzx eax, ax */
+      } else if (to_k == OL_TY_I32 || to_k == OL_TY_U32 || to_k == OL_TY_B32) {
+        if (from_k == OL_TY_I8) tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbe, 0xc0}, 4); /* movsx rax, al */
+        else if (from_k == OL_TY_I16) tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0xc0}, 4); /* movsx rax, ax */
+        else if (from_k == OL_TY_I64 || from_k == OL_TY_U64 || from_k == OL_TY_B64) tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2); /* truncate */
+        else tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0xc0}, 3); /* movzx eax, al (u8/b8) */
+      } else if (from_k == OL_TY_I32 && to_k == OL_TY_I64) {
         tx_copy(g, (uint8_t[]){0x48, 0x63, 0xc0}, 3);
-      } else if ((e->u.cast_.inner->ty.kind == OL_TY_U32 || type_is_byte_like(&e->u.cast_.inner->ty)) && e->ty.kind == OL_TY_U64) {
-        tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2);
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_I64 && e->ty.kind == OL_TY_PTR) {
+      } else if (to_k == OL_TY_U64 || to_k == OL_TY_I64) {
+        /* Widening to 64-bit from smaller types: zero-extend (already in rax) or sign-extend */
+        if (from_k == OL_TY_I32) tx_copy(g, (uint8_t[]){0x48, 0x63, 0xc0}, 3);
+        else if (from_k == OL_TY_I16) tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0xc0}, 4); /* movsx rax, ax */
+        else if (from_k == OL_TY_I8) tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbe, 0xc0}, 4); /* movsx rax, al */
+        else tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2); /* zero-extend 32-bit */
+      } else if (from_k == OL_TY_I64 && to_k == OL_TY_PTR) {
         /* nop */
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_PTR && e->ty.kind == OL_TY_I64) {
+      } else if (from_k == OL_TY_PTR && to_k == OL_TY_I64) {
         /* nop */
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_I32 && e->ty.kind == OL_TY_PTR) {
+      } else if (from_k == OL_TY_U64 && to_k == OL_TY_PTR) {
+        /* nop */
+      } else if (from_k == OL_TY_PTR && to_k == OL_TY_U64) {
+        /* nop */
+      } else if (from_k == OL_TY_I32 && to_k == OL_TY_PTR) {
         tx_copy(g, (uint8_t[]){0x48, 0x63, 0xc0}, 3);
-      } else if (e->u.cast_.inner->ty.kind == OL_TY_PTR && e->ty.kind == OL_TY_I32) {
+      } else if (from_k == OL_TY_PTR && to_k == OL_TY_I32) {
         tx_copy(g, (uint8_t[]){0x8b, 0xc0}, 2);
       }
-      out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
       return out;
     }
@@ -706,11 +1034,13 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_gpr_from_slot(g, 0, ps);
       emit_mov_gpr_from_slot(g, 3, vs);
       if (sz == 8)
-        tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3);
+        tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3); /* mov [rax], rbx */
       else if (sz == 4)
-        tx_copy(g, (uint8_t[]){0x89, 0x18}, 2);
+        tx_copy(g, (uint8_t[]){0x89, 0x18}, 2); /* mov [rax], ebx */
+      else if (sz == 2)
+        tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3); /* mov word [rax], bx */
       else if (sz == 1)
-        tx_copy(g, (uint8_t[]){0x88, 0x18}, 2);
+        tx_copy(g, (uint8_t[]){0x88, 0x18}, 2); /* mov [rax], bl */
       else {
         cg_err(g, "store size");
         return -1;
@@ -776,8 +1106,9 @@ static int gen_expr(CG *g, OlExpr *e) {
           ti = ol_program_find_typedef(g->p, g->loc[li].ty.alias_name);
           if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
             const char *elem = g->p->typedefs[ti].elem_type;
-            if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0) esz = 4;
-            else if (strcmp(elem, "u8") == 0 || strcmp(elem, "bool") == 0) esz = 1;
+            if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+            else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+            else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
           }
         }
         /* If not local, check global variable */
@@ -790,8 +1121,9 @@ static int gen_expr(CG *g, OlExpr *e) {
                 ti = ol_program_find_typedef(g->p, g->p->globals[(size_t)gi].ty.alias_name);
                 if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
                   const char *elem = g->p->typedefs[ti].elem_type;
-                  if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0) esz = 4;
-                  else if (strcmp(elem, "u8") == 0 || strcmp(elem, "bool") == 0) esz = 1;
+                  if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+                  else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+                  else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
                 }
               }
             }
@@ -804,6 +1136,8 @@ static int gen_expr(CG *g, OlExpr *e) {
         tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x03}, 4); /* shl rcx, 3 */
       } else if (esz == 4) {
         tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x02}, 4); /* shl rcx, 2 */
+      } else if (esz == 2) {
+        tx_copy(g, (uint8_t[]){0x48, 0xd1, 0xe1}, 3); /* shl rcx, 1 */
       }
       tx_copy(g, (uint8_t[]){0x48, 0x01, 0xcb}, 3); /* add rbx, rcx */
       tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3); /* mov rax, rbx */
@@ -978,8 +1312,9 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
               int ti = ol_program_find_typedef(g->p, g->loc[li].ty.alias_name);
               if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
                 const char *elem = g->p->typedefs[ti].elem_type;
-                if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0) esz = 4;
-                else if (strcmp(elem, "u8") == 0 || strcmp(elem, "bool") == 0) esz = 1;
+                if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+                else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+                else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
               }
             }
             /* If not local, check global variable */
@@ -992,8 +1327,9 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
                     int ti = ol_program_find_typedef(g->p, g->p->globals[(size_t)gi].ty.alias_name);
                     if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
                       const char *elem = g->p->typedefs[ti].elem_type;
-                      if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0) esz = 4;
-                      else if (strcmp(elem, "u8") == 0 || strcmp(elem, "bool") == 0) esz = 1;
+                      if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+                      else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+                      else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
                     }
                   }
                 }
@@ -1013,8 +1349,8 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x03}, 4); /* shl rcx, 3 */
           } else if (esz == 4) {
             tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x02}, 4); /* shl rcx, 2 */
-          } else if (esz == 1) {
-            /* no shift needed */
+          } else if (esz == 2) {
+            tx_copy(g, (uint8_t[]){0x48, 0xd1, 0xe1}, 3); /* shl rcx, 1 */
           }
           /* Compute element address: rbx = rbx + rcx */
           tx_copy(g, (uint8_t[]){0x48, 0x01, 0xcb}, 3); /* add rbx, rcx */
@@ -1024,6 +1360,8 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3); /* mov [rbx], rax */
           } else if (esz == 4) {
             tx_copy(g, (uint8_t[]){0x89, 0x03}, 2); /* mov [rbx], eax */
+          } else if (esz == 2) {
+            tx_copy(g, (uint8_t[]){0x66, 0x89, 0x03}, 3); /* mov word [rbx], ax */
           } else if (esz == 1) {
             tx_copy(g, (uint8_t[]){0x88, 0x03}, 2); /* mov [rbx], al */
           }
@@ -1056,9 +1394,10 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             int fti = ol_program_find_typedef(g->p, sname);
             if (fti >= 0) {
               const char *ftype = g->p->typedefs[ti].fields[fi].type_name;
-              if (strcmp(ftype, "bool") == 0 || strcmp(ftype, "u8") == 0) fsz = 1;
-              else if (strcmp(ftype, "i32") == 0 || strcmp(ftype, "u32") == 0) fsz = 4;
-              else if (strcmp(ftype, "i64") == 0 || strcmp(ftype, "u64") == 0 || strcmp(ftype, "ptr") == 0) fsz = 8;
+              if (strcmp(ftype, "bool") == 0 || strcmp(ftype, "u8") == 0 || strcmp(ftype, "i8") == 0 || strcmp(ftype, "b8") == 0) fsz = 1;
+              else if (strcmp(ftype, "u16") == 0 || strcmp(ftype, "i16") == 0 || strcmp(ftype, "f16") == 0 || strcmp(ftype, "b16") == 0) fsz = 2;
+              else if (strcmp(ftype, "i32") == 0 || strcmp(ftype, "u32") == 0 || strcmp(ftype, "f32") == 0 || strcmp(ftype, "b32") == 0) fsz = 4;
+              else if (strcmp(ftype, "i64") == 0 || strcmp(ftype, "u64") == 0 || strcmp(ftype, "f64") == 0 || strcmp(ftype, "b64") == 0 || strcmp(ftype, "ptr") == 0) fsz = 8;
               else {
                 /* Nested typedef - look up size */
                 int k = ol_program_find_typedef(g->p, ftype);
@@ -1105,6 +1444,8 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
               tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3); /* mov [rbx], rax */
             } else if (fsz == 4) {
               tx_copy(g, (uint8_t[]){0x89, 0x03}, 2); /* mov [rbx], eax */
+            } else if (fsz == 2) {
+              tx_copy(g, (uint8_t[]){0x66, 0x89, 0x03}, 3); /* mov word [rbx], ax */
             } else if (fsz == 1) {
               tx_copy(g, (uint8_t[]){0x88, 0x03}, 2); /* mov [rbx], al */
             }
@@ -1167,15 +1508,28 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         if (s->u.ret.val) {
           int rs = gen_expr(g, s->u.ret.val);
           if (rs < 0) return 0;
-          if (type_is_byte_like(&fn->ret))
+          if (type_is_float(&fn->ret)) {
+            /* Float return: load into xmm0 (standard convention) then also copy bits to rax for OLang ABI */
+            int32_t rd = slot_disp(rs);
+            if (fn->ret.kind == OL_TY_F64) {
+              if (rd >= -128 && rd <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)rd}, 5);
+              else { tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&rd, 4); }
+              tx_copy(g, (uint8_t[]){0x66, 0x48, 0x0f, 0x7e, 0xc0}, 5); /* movq rax, xmm0 */
+            } else {
+              if (rd >= -128 && rd <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)rd}, 5);
+              else { tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4); tx_copy(g, (uint8_t*)&rd, 4); }
+              tx_copy(g, (uint8_t[]){0x66, 0x0f, 0x7e, 0xc0}, 4); /* movd eax, xmm0 */
+            }
+          } else if (type_is_byte_like(&fn->ret))
             emit_mov_eax_zext8_from_slot(g, rs);
+          else if (type_is_word_like(&fn->ret))
+            emit_mov_eax_zext16_from_slot(g, rs);
           else if (fn->ret.kind == OL_TY_I32 || fn->ret.kind == OL_TY_U32)
             emit_mov_eax_from_slot(g, rs);
           else
             emit_mov_r64_rbp(g, 0, rs);
         }
-        emit_epilogue(g);
-        g->emitted_ret_epilogue = 1;
+        emit_jmp_rel32(g, g->fn_exit_lbl);
         break;
       case OL_ST_EXPR:
         if (gen_expr(g, s->u.expr) < 0) return 0;
@@ -1194,7 +1548,7 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         int bs = lookup_slot(g, s->u.deref.bind);
         uint32_t dsz = type_size_bytes(g->p, &s->u.deref.ty);
         if (bs < 0) return 0;
-        if (dsz != 1u && dsz != 4u && dsz != 8u) {
+        if (dsz != 1u && dsz != 2u && dsz != 4u && dsz != 8u) {
           cg_err(g, "deref load size");
           return 0;
         }
@@ -1217,14 +1571,17 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
 static int gen_function(CG *g, OlFuncDef *fn) {
   size_t start = g->tx_len;
   size_t i;
+  size_t frame_imm_patch;
+  int32_t fb;
   (void)start;
   g->next_slot = (int)fn->param_count;
   g->nloc = 0;
   g->nlbl = 0;
-  g->emitted_ret_epilogue = 0;
   memset(g->lbl_set, 0, sizeof(g->lbl_set));
+  g->fn_exit_lbl = new_lbl(g);
+  if (g->fn_exit_lbl < 0) return 0;
 
-  emit_prologue(g);
+  frame_imm_patch = emit_prologue_frame_placeholder(g);
   if (g->failed) return 0;
   /* OLang ABI: spill register params r12,r13,r14,r15,rdi,rsi,r8,r9 to stack slots */
   {
@@ -1269,9 +1626,12 @@ static int gen_function(CG *g, OlFuncDef *fn) {
   if (!gen_stmt(g, fn, fn->body)) return 0;
   if (g->failed) return 0;
 
+  bind_lbl(g, g->fn_exit_lbl);
+  fb = frame_bytes_for_slot_count(g->next_slot);
+  patch_u32_at(g, frame_imm_patch, fb);
+  emit_epilogue(g, fb);
+
   resolve_fixups(g);
-  if (g->failed) return 0;
-  if (fn->ret.kind == OL_TY_VOID && !g->emitted_ret_epilogue) emit_epilogue(g);
   if (g->failed) return 0;
   return 1;
 }
@@ -1322,7 +1682,9 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
       if (!gd->init)
         use_bss = 1;
       else if ((gd->init->kind == OL_EX_INT && gd->init->u.int_.int_val == 0) ||
-               (gd->init->kind == OL_EX_BOOL && gd->init->u.bool_val == 0) || (gd->init->kind == OL_EX_CHAR && gd->init->u.char_val == 0))
+               (gd->init->kind == OL_EX_BOOL && gd->init->u.bool_val == 0) ||
+               (gd->init->kind == OL_EX_CHAR && gd->init->u.char_val == 0) ||
+               (gd->init->kind == OL_EX_FLOAT && gd->init->u.float_.float_val == 0.0))
         use_bss = 1;
       else
         use_data = 1;
@@ -1377,14 +1739,14 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
           v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
         else
           v = (uint64_t)gd->init->u.char_val;
-        if (sz == 1u)
-          g->ro[g->ro_len] = (uint8_t)v;
-        else if (sz == 4u) {
-          uint32_t u = (uint32_t)v;
-          memcpy(g->ro + g->ro_len, &u, 4);
-        } else {
-          memcpy(g->ro + g->ro_len, &v, 8);
-        }
+        if (sz == 1u) g->ro[g->ro_len] = (uint8_t)v;
+        else if (sz == 2u) { uint16_t u = (uint16_t)v; memcpy(g->ro + g->ro_len, &u, 2); }
+        else if (sz == 4u) { uint32_t u = (uint32_t)v; memcpy(g->ro + g->ro_len, &u, 4); }
+        else { memcpy(g->ro + g->ro_len, &v, 8); }
+      } else if (gd->init->kind == OL_EX_FLOAT) {
+        if (sz == 8u) { double d = gd->init->u.float_.float_val; memcpy(g->ro + g->ro_len, &d, 8); }
+        else if (sz == 4u) { float f = (float)gd->init->u.float_.float_val; memcpy(g->ro + g->ro_len, &f, 4); }
+        else if (sz == 2u) { uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val); memcpy(g->ro + g->ro_len, &h, 2); }
       } else if (gd->init->kind == OL_EX_STR) {
         OlStringLit *sl = &g->p->strings[gd->init->u.str_idx];
         if (*n_abs64 >= 64) {
@@ -1440,14 +1802,14 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
           v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
         else
           v = (uint64_t)gd->init->u.char_val;
-        if (sz == 1u)
-          g->data[g->data_len] = (uint8_t)v;
-        else if (sz == 4u) {
-          uint32_t u = (uint32_t)v;
-          memcpy(g->data + g->data_len, &u, 4);
-        } else {
-          memcpy(g->data + g->data_len, &v, 8);
-        }
+        if (sz == 1u) g->data[g->data_len] = (uint8_t)v;
+        else if (sz == 2u) { uint16_t u = (uint16_t)v; memcpy(g->data + g->data_len, &u, 2); }
+        else if (sz == 4u) { uint32_t u = (uint32_t)v; memcpy(g->data + g->data_len, &u, 4); }
+        else { memcpy(g->data + g->data_len, &v, 8); }
+      } else if (gd->init->kind == OL_EX_FLOAT) {
+        if (sz == 8u) { double d = gd->init->u.float_.float_val; memcpy(g->data + g->data_len, &d, 8); }
+        else if (sz == 4u) { float f = (float)gd->init->u.float_.float_val; memcpy(g->data + g->data_len, &f, 4); }
+        else if (sz == 2u) { uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val); memcpy(g->data + g->data_len, &h, 2); }
       } else if (gd->init->kind == OL_EX_STR) {
         OlStringLit *sl = &g->p->strings[gd->init->u.str_idx];
         if (*n_abs64 >= 64) {

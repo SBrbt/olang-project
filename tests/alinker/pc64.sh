@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PC64 relocation: 8-byte slot at start of .text gets S - P for symbol at +8 (expect 8).
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 BIN="$ROOT/bin/alinker"
 FIX="$ROOT/tests/fixtures/alinker_pc64"

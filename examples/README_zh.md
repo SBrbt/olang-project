@@ -23,7 +23,7 @@ bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
 
 ### 期望结果
 
-退出码与 stdout 以 [`tests/run_programs_olc.sh`](../tests/run_programs_olc.sh) 为准（`make check` 会执行）；下表便于阅读，不一致时以脚本为准。
+退出码与 stdout 以 [`tests/olang/run_programs_olc.sh`](../tests/olang/run_programs_olc.sh) 为准（`make check` 会执行）；下表便于阅读，不一致时以脚本为准。
 
 | 程序 (`ex_*.ol`) | 期望 |
 |------------------|------|
@@ -38,7 +38,7 @@ bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
 - 默认 **`return cast<i32>(0)`** 表示通过。
 - Phase 1 无对已有 `let` 的赋值；计数场景可能用递归代替可变循环。
 
-新增 `ex_*.ol` 时脚本会自动编译运行；需要特殊 stdout/退出码断言时编辑 `tests/run_programs_olc.sh`。
+新增 `ex_*.ol` 时脚本会自动编译运行；需要特殊 stdout/退出码断言时编辑 `tests/olang/run_programs_olc.sh`。
 
 ### 多文件示例
 

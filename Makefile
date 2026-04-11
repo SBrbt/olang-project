@@ -18,7 +18,7 @@ OLANG_SRC := \
 
 BIN_DIR := bin
 
-all: $(BIN_DIR)/alinker $(BIN_DIR)/kasm $(BIN_DIR)/olang $(BIN_DIR)/obinutils
+all: $(BIN_DIR)/alinker $(BIN_DIR)/kasm $(BIN_DIR)/olang $(BIN_DIR)/obinutils $(BIN_DIR)/olprep
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -35,24 +35,30 @@ $(BIN_DIR)/olang: $(BIN_DIR) olang/src/main.c $(OLANG_SRC) $(OOBJ_SRC)
 $(BIN_DIR)/obinutils: $(BIN_DIR) obinutils/src/main.c $(OOBJ_SRC)
 	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ obinutils/src/main.c $(OOBJ_SRC)
 
+$(BIN_DIR)/olprep: $(BIN_DIR) preproc/src/main.c
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -o $@ preproc/src/main.c
+
 clean:
 	rm -rf $(BIN_DIR) examples/out
 
-check: all check-link-script check-alinker check-kasm check-olang
+check: all check-link-script check-alinker check-kasm check-preproc check-olang
 	@echo "OK: all checks passed"
 
+check-preproc: $(BIN_DIR)/olprep
+	bash tests/preproc/include.sh
+
 check-olang: $(BIN_DIR)/olang
-	bash tests/run_programs_olc.sh
-	bash tests/check_olang_bounds.sh
+	bash tests/olang/run_programs_olc.sh
+	bash tests/olang/check_olang_bounds.sh
 
 check-alinker: $(BIN_DIR)/alinker
-	bash tests/alinker_smoke.sh
-	bash tests/alinker_pc64.sh
-	bash tests/alinker_multi_obj.sh
+	bash tests/alinker/smoke.sh
+	bash tests/alinker/pc64.sh
+	bash tests/alinker/multi_obj.sh
 
 check-kasm: $(BIN_DIR)/kasm $(BIN_DIR)/obinutils
-	bash tests/kasm_label_comment.sh
-	bash tests/kasm_bytes_tab.sh
+	bash tests/kasm/label_comment.sh
+	bash tests/kasm/bytes_tab.sh
 
 $(BIN_DIR)/link_script_test: $(BIN_DIR) tests/link_script_test.c common/link_script.c
 	$(CC) $(CFLAGS) $(COMMON_INC) -o $@ tests/link_script_test.c common/link_script.c
@@ -60,4 +66,4 @@ $(BIN_DIR)/link_script_test: $(BIN_DIR) tests/link_script_test.c common/link_scr
 check-link-script: $(BIN_DIR)/link_script_test
 	$(BIN_DIR)/link_script_test
 
-.PHONY: all clean check check-link-script check-alinker check-kasm check-olang
+.PHONY: all clean check check-link-script check-alinker check-kasm check-preproc check-olang

@@ -10,10 +10,20 @@ typedef enum OlTyKind {
   OL_TY_VOID = 0,
   OL_TY_BOOL,
   OL_TY_U8,
+  OL_TY_I8,
+  OL_TY_U16,
+  OL_TY_I16,
   OL_TY_I32,
   OL_TY_U32,
   OL_TY_I64,
   OL_TY_U64,
+  OL_TY_F16,
+  OL_TY_F32,
+  OL_TY_F64,
+  OL_TY_B8,
+  OL_TY_B16,
+  OL_TY_B32,
+  OL_TY_B64,
   OL_TY_PTR,
   OL_TY_ALIAS
 } OlTyKind;
@@ -37,15 +47,18 @@ typedef struct OlExternDecl {
 
 typedef enum OlExprKind {
   OL_EX_INT = 1,
+  OL_EX_FLOAT,
   OL_EX_STR,
   OL_EX_BOOL,
   OL_EX_CHAR,
   OL_EX_VAR,
   OL_EX_NEG,
   OL_EX_NOT,
+  OL_EX_BNOT,
   OL_EX_BINARY,
   OL_EX_CALL,
   OL_EX_CAST,
+  OL_EX_REINTERPRET,
   OL_EX_ADDR,
   OL_EX_LOAD,
   OL_EX_STORE,
@@ -66,7 +79,12 @@ typedef enum OlBinOp {
   OL_BIN_LE,
   OL_BIN_GE,
   OL_BIN_AND,
-  OL_BIN_OR
+  OL_BIN_OR,
+  OL_BIN_BAND,
+  OL_BIN_BOR,
+  OL_BIN_BXOR,
+  OL_BIN_SHL,
+  OL_BIN_SHR
 } OlBinOp;
 
 typedef struct OlExpr OlExpr;
@@ -77,8 +95,12 @@ struct OlExpr {
   union {
     struct {
       int64_t int_val;
-      uint8_t int_suffix; /* 0=none, 1=i32, 2=i64, 3=u8, 4=u32, 5=u64 */
+      uint8_t int_suffix; /* 0=none, 1=i32, 2=i64, 3=u8, 4=u32, 5=u64, 6=i8, 7=i16, 8=u16, 9=b8, 10=b16, 11=b32, 12=b64 */
     } int_;
+    struct {
+      double float_val;
+      uint8_t float_suffix; /* 0=f64, 1=f32, 2=f16 */
+    } float_;
     size_t str_idx;
     int bool_val;
     uint8_t char_val;
@@ -89,6 +111,9 @@ struct OlExpr {
     struct {
       OlExpr *inner;
     } not_;
+    struct {
+      OlExpr *inner;
+    } bnot;
     struct {
       OlBinOp op;
       OlExpr *left;
@@ -103,6 +128,10 @@ struct OlExpr {
       OlTypeRef to;
       OlExpr *inner;
     } cast_;
+    struct {
+      OlTypeRef to;
+      OlExpr *inner;
+    } reinterpret_;
     struct {
       char name[128];
     } addr;

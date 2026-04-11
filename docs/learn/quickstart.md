@@ -19,10 +19,11 @@ make all
 ```
 
 Generates:
+- `bin/olprep` — preprocessor (`#include` only)
 - `bin/olang` — compiler
 - `bin/kasm` — assembler
 - `bin/alinker` — linker
-- `examples/olc` — driver script
+- `examples/olc` — driver script (runs `olprep` then the rest; keeps intermediates in `<output>.olc.d/`)
 
 ### Verify
 

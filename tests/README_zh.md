@@ -1,6 +1,6 @@
 # 测试
 
-**[English](README.md)** | **中文**
+**[English](README.md)** | 中文
 
 ---
 
@@ -10,65 +10,51 @@
 make check
 ```
 
-### 测试结构
+顺序大致为：链接脚本单元测试（`bin/link_script_test`）、alinker、kasm、预处理器，最后是 OLang 集成（用 `examples/olc` 跑完 `examples/programs/ex_*.ol`、`tests/olang/olang_*.ol`、多文件链接，以及预期失败用例）。
+
+### 快速子集（仅 OLang + 示例）
+
+`tests/check_examples.sh` 会 `make clean && make all`，然后只跑 `tests/olang/` 下的两个脚本。**不会**跑链接器、kasm、预处理器测试 —— 发版前请用 `make check`。
+
+### 目录结构
 
 ```
 tests/
-├── README.md                 # 本文件
-├── run_programs_olc.sh       # 30+ 示例程序测试
-├── check_olang_bounds.sh     # 边界测试
-├── alinker_*.sh              # 链接器测试
-├── kasm_*.sh                 # 汇编器测试
-├── fixtures/                 # 测试固件
-├── olang_*.ol                # 边界测试用例
-└── olang_fail/               # 预期失败的测试
+├── README.md
+├── check_examples.sh          # 快速路径：仅 OLang 集成（需先完整构建）
+├── link_script_test.c         # 链接脚本解析；Makefile 生成 bin/link_script_test
+├── olang/
+│   ├── run_programs_olc.sh    # ex_*.ol + tests/olang/olang_*.ol + multi_file 链接
+│   ├── check_olang_bounds.sh  # 预期编译失败（olang_fail/）
+│   ├── olang_*.ol             # 额外程序（路径写在 run_programs_olc.sh 的数组里）
+│   └── olang_fail/            # 必须编译失败的输入
+├── alinker/
+│   ├── smoke.sh
+│   ├── pc64.sh
+│   └── multi_obj.sh
+├── kasm/
+│   ├── label_comment.sh
+│   └── bytes_tab.sh
+├── preproc/
+│   └── include.sh             # olprep #include
+└── fixtures/                  # 各脚本共享的测试数据
 ```
 
-### 测试类别
+### 按组件
 
-#### 回归测试
-
-`run_programs_olc.sh` — 编译并运行所有 `examples/programs/ex_*.ol`：
-
-```bash
-bash tests/run_programs_olc.sh
-# OK: run_programs_olc.sh (30 programs)
-```
-
-#### 边界测试
-
-`check_olang_bounds.sh` — 测试编译器边界情况：
-
-| 测试 | 说明 |
+| 区域 | 作用 |
 |------|------|
-| `olang_aggregate_copy.ol` | 聚合类型值拷贝 |
-| `olang_nested_struct.ol` | 嵌套结构体访问 |
-| `olang_u64_max.ol` | u64 最大范围 |
+| **OLang** | `run_programs_olc.sh` 编译并运行每个 `ex_*.ol`，再运行 `tests/olang/olang_*.ol`，最后多文件链接（见脚本里的多行 `OK:`）。`check_olang_bounds.sh` 检查 `olang_fail/*.ol` 必须编译失败。 |
+| **alinker** | `smoke.sh`、`pc64.sh`、`multi_obj.sh` —— 使用 `fixtures/` 下的 `.oobj` 与 JSON。 |
+| **kasm** | 汇编器边界情况；临时目录在 `fixtures/`。 |
+| **preproc** | `include.sh` —— `#include "..."` 与 golden `expected.ol` 一致。 |
+| **link script** | `link_script_test.c` 覆盖 alinker 使用的 C 解析逻辑。 |
 
-### 失败测试
+### 新增测试
 
-`olang_fail/` — 预期编译失败的程序：
-
-- `fail_long_ident.ol` — 标识符过长
-- `fail_unterminated_string.ol` — 未终止字符串
-
-### 链接器测试
-
-- `alinker_smoke.sh` — 基本功能
-- `alinker_pc64.sh` — 程序计数器相对寻址
-- `alinker_multi_obj.sh` — 多对象链接
-
-### 汇编器测试
-
-- `kasm_label_comment.sh` — 标签与注释
-- `kasm_bytes_tab.sh` — 字节表
-
-### 添加新测试
-
-1. 创建测试程序 `tests/my_test.ol`
-2. 添加测试脚本或添加到现有脚本
-3. 在 `Makefile` 的 `check` 目标中引用
+1. 新示例：添加 `examples/programs/ex_*.ol`（由通配符收录）。若在 `tests/olang/` 下增加额外程序，须在 `run_programs_olc.sh` 的 `TESTS_OLANG_SRC` 数组里加入路径（须以退出码 0 表示成功）。若退出码或 stdout 需要特殊断言，改 `run_programs_olc.sh`。
+2. 组件级测试：在对应子目录加脚本，fixture 放在 `fixtures/<name>/`，在顶层 `Makefile` 的对应 `check-*` 规则里增加一行 `bash tests/...`。
 
 ---
 
-[返回文档](../docs/README_zh.md)
+[返回文档索引](../docs/README.md)

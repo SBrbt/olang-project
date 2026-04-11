@@ -50,60 +50,88 @@ static int type_eq(const OlTypeRef *a, const OlTypeRef *b) {
 static void type_copy(OlTypeRef *dst, const OlTypeRef *src) { *dst = *src; }
 
 static int type_is_int(const OlTypeRef *t) {
-  return t->kind == OL_TY_I32 || t->kind == OL_TY_I64 || t->kind == OL_TY_U8 || t->kind == OL_TY_U32 || t->kind == OL_TY_U64;
+  return t->kind == OL_TY_I8 || t->kind == OL_TY_U8 ||
+         t->kind == OL_TY_I16 || t->kind == OL_TY_U16 ||
+         t->kind == OL_TY_I32 || t->kind == OL_TY_U32 ||
+         t->kind == OL_TY_I64 || t->kind == OL_TY_U64;
+}
+static int type_is_signed_int(const OlTypeRef *t) {
+  return t->kind == OL_TY_I8 || t->kind == OL_TY_I16 || t->kind == OL_TY_I32 || t->kind == OL_TY_I64;
+}
+static int type_is_unsigned_int(const OlTypeRef *t) {
+  return t->kind == OL_TY_U8 || t->kind == OL_TY_U16 || t->kind == OL_TY_U32 || t->kind == OL_TY_U64;
+}
+static int type_is_float(const OlTypeRef *t) {
+  return t->kind == OL_TY_F16 || t->kind == OL_TY_F32 || t->kind == OL_TY_F64;
+}
+static int type_is_binary(const OlTypeRef *t) {
+  return t->kind == OL_TY_B8 || t->kind == OL_TY_B16 || t->kind == OL_TY_B32 || t->kind == OL_TY_B64;
 }
 static int type_is_scalar(const OlTypeRef *t) {
-  return type_is_int(t) || t->kind == OL_TY_PTR || t->kind == OL_TY_BOOL;
+  return type_is_int(t) || type_is_float(t) || type_is_binary(t) || t->kind == OL_TY_PTR || t->kind == OL_TY_BOOL;
 }
 static int type_is_condition(const OlTypeRef *t) {
-  return t->kind == OL_TY_BOOL || type_is_int(t);
+  return t->kind == OL_TY_BOOL;
 }
 
 static int type_is_valid(const OlProgram *p, const OlTypeRef *t) {
-  if (t->kind == OL_TY_VOID || t->kind == OL_TY_BOOL || t->kind == OL_TY_U8 || t->kind == OL_TY_I32 || t->kind == OL_TY_U32 || t->kind == OL_TY_I64 || t->kind == OL_TY_U64 || t->kind == OL_TY_PTR) return 1;
+  if (t->kind == OL_TY_VOID || t->kind == OL_TY_BOOL ||
+      t->kind == OL_TY_U8 || t->kind == OL_TY_I8 ||
+      t->kind == OL_TY_U16 || t->kind == OL_TY_I16 ||
+      t->kind == OL_TY_I32 || t->kind == OL_TY_U32 ||
+      t->kind == OL_TY_I64 || t->kind == OL_TY_U64 ||
+      t->kind == OL_TY_F16 || t->kind == OL_TY_F32 || t->kind == OL_TY_F64 ||
+      t->kind == OL_TY_B8 || t->kind == OL_TY_B16 || t->kind == OL_TY_B32 || t->kind == OL_TY_B64 ||
+      t->kind == OL_TY_PTR) return 1;
   if (t->kind != OL_TY_ALIAS) return 0;
   return ol_program_find_typedef(p, t->alias_name) >= 0;
 }
 
 static int type_from_name(const char *tn, OlTypeRef *out) {
   memset(out, 0, sizeof(*out));
-  if (strcmp(tn, "bool") == 0) {
-    out->kind = OL_TY_BOOL;
-    return 1;
-  }
-  if (strcmp(tn, "u8") == 0) {
-    out->kind = OL_TY_U8;
-    return 1;
-  }
-  if (strcmp(tn, "i32") == 0) {
-    out->kind = OL_TY_I32;
-    return 1;
-  }
-  if (strcmp(tn, "u32") == 0) {
-    out->kind = OL_TY_U32;
-    return 1;
-  }
-  if (strcmp(tn, "i64") == 0) {
-    out->kind = OL_TY_I64;
-    return 1;
-  }
-  if (strcmp(tn, "u64") == 0) {
-    out->kind = OL_TY_U64;
-    return 1;
-  }
-  if (strcmp(tn, "ptr") == 0) {
-    out->kind = OL_TY_PTR;
-    return 1;
-  }
+  if (strcmp(tn, "bool") == 0) { out->kind = OL_TY_BOOL; return 1; }
+  if (strcmp(tn, "u8") == 0) { out->kind = OL_TY_U8; return 1; }
+  if (strcmp(tn, "i8") == 0) { out->kind = OL_TY_I8; return 1; }
+  if (strcmp(tn, "u16") == 0) { out->kind = OL_TY_U16; return 1; }
+  if (strcmp(tn, "i16") == 0) { out->kind = OL_TY_I16; return 1; }
+  if (strcmp(tn, "i32") == 0) { out->kind = OL_TY_I32; return 1; }
+  if (strcmp(tn, "u32") == 0) { out->kind = OL_TY_U32; return 1; }
+  if (strcmp(tn, "i64") == 0) { out->kind = OL_TY_I64; return 1; }
+  if (strcmp(tn, "u64") == 0) { out->kind = OL_TY_U64; return 1; }
+  if (strcmp(tn, "f16") == 0) { out->kind = OL_TY_F16; return 1; }
+  if (strcmp(tn, "f32") == 0) { out->kind = OL_TY_F32; return 1; }
+  if (strcmp(tn, "f64") == 0) { out->kind = OL_TY_F64; return 1; }
+  if (strcmp(tn, "b8") == 0) { out->kind = OL_TY_B8; return 1; }
+  if (strcmp(tn, "b16") == 0) { out->kind = OL_TY_B16; return 1; }
+  if (strcmp(tn, "b32") == 0) { out->kind = OL_TY_B32; return 1; }
+  if (strcmp(tn, "b64") == 0) { out->kind = OL_TY_B64; return 1; }
+  if (strcmp(tn, "ptr") == 0) { out->kind = OL_TY_PTR; return 1; }
   out->kind = OL_TY_ALIAS;
   snprintf(out->alias_name, sizeof(out->alias_name), "%s", tn);
   return 1;
 }
 
 static int can_explicit_cast(const OlTypeRef *from, const OlTypeRef *to) {
-  if (type_eq(from, to)) return 1;
-  if (!type_is_scalar(from) || !type_is_scalar(to)) return 0;
-  return 1;
+  if (type_eq(from, to)) return 0; /* same type same width: use reinterpret */
+  /* uN -> uN */
+  if (type_is_unsigned_int(from) && type_is_unsigned_int(to)) return 1;
+  /* iN -> iN */
+  if (type_is_signed_int(from) && type_is_signed_int(to)) return 1;
+  /* bN -> bN */
+  if (type_is_binary(from) && type_is_binary(to)) return 1;
+  /* fN -> fN */
+  if (type_is_float(from) && type_is_float(to)) return 1;
+  /* fN <-> iN */
+  if (type_is_float(from) && type_is_signed_int(to)) return 1;
+  if (type_is_signed_int(from) && type_is_float(to)) return 1;
+  /* fN <-> uN */
+  if (type_is_float(from) && type_is_unsigned_int(to)) return 1;
+  if (type_is_unsigned_int(from) && type_is_float(to)) return 1;
+  /* bool -> uN/iN */
+  if (from->kind == OL_TY_BOOL && (type_is_unsigned_int(to) || type_is_signed_int(to))) return 1;
+  /* uN/iN -> bool */
+  if ((type_is_unsigned_int(from) || type_is_signed_int(from)) && to->kind == OL_TY_BOOL) return 1;
+  return 0;
 }
 
 static int resolve_field_type(const OlProgram *p, const char *struct_name, const char *field_name, OlTypeRef *out) {
@@ -141,12 +169,23 @@ static uint32_t ty_size_bytes(const OlProgram *p, const OlTypeRef *t) {
       return 0u;
     case OL_TY_BOOL:
     case OL_TY_U8:
+    case OL_TY_I8:
+    case OL_TY_B8:
       return 1u;
+    case OL_TY_U16:
+    case OL_TY_I16:
+    case OL_TY_F16:
+    case OL_TY_B16:
+      return 2u;
     case OL_TY_I32:
     case OL_TY_U32:
+    case OL_TY_F32:
+    case OL_TY_B32:
       return 4u;
     case OL_TY_I64:
     case OL_TY_U64:
+    case OL_TY_F64:
+    case OL_TY_B64:
     case OL_TY_PTR:
       return 8u;
     case OL_TY_ALIAS:
@@ -256,6 +295,7 @@ static int init_expr_is_const(const OlExpr *e) {
   if (!e) return 0;
   switch (e->kind) {
     case OL_EX_INT:
+    case OL_EX_FLOAT:
     case OL_EX_BOOL:
     case OL_EX_CHAR:
     case OL_EX_STR:
@@ -282,7 +322,21 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
         case 3: e->ty.kind = OL_TY_U8; break;
         case 4: e->ty.kind = OL_TY_U32; break;
         case 5: e->ty.kind = OL_TY_U64; break;
+        case 6: e->ty.kind = OL_TY_I8; break;
+        case 7: e->ty.kind = OL_TY_I16; break;
+        case 8: e->ty.kind = OL_TY_U16; break;
+        case 9: e->ty.kind = OL_TY_B8; break;
+        case 10: e->ty.kind = OL_TY_B16; break;
+        case 11: e->ty.kind = OL_TY_B32; break;
+        case 12: e->ty.kind = OL_TY_B64; break;
         default: e->ty.kind = OL_TY_I32; break;
+      }
+      return 1;
+    case OL_EX_FLOAT:
+      switch (e->u.float_.float_suffix) {
+        case 1: e->ty.kind = OL_TY_F32; break;
+        case 2: e->ty.kind = OL_TY_F16; break;
+        default: e->ty.kind = OL_TY_F64; break;
       }
       return 1;
     case OL_EX_BOOL:
@@ -305,48 +359,105 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
     }
     case OL_EX_NEG:
       if (!resolve_expr(S, e->u.neg.inner)) return 0;
-      if (!type_is_int(&e->u.neg.inner->ty)) {
-        sema_err(S, e->line, "negation on non-int");
+      if (!type_is_int(&e->u.neg.inner->ty) && !type_is_float(&e->u.neg.inner->ty) && !type_is_binary(&e->u.neg.inner->ty)) {
+        sema_err(S, e->line, "negation requires int, float, or binary operand");
         return 0;
       }
       type_copy(&e->ty, &e->u.neg.inner->ty);
       return 1;
     case OL_EX_NOT:
       if (!resolve_expr(S, e->u.not_.inner)) return 0;
-      if (!type_is_condition(&e->u.not_.inner->ty)) {
-        sema_err(S, e->line, "! requires bool or int operand");
+      if (e->u.not_.inner->ty.kind != OL_TY_BOOL) {
+        sema_err(S, e->line, "! requires bool operand");
         return 0;
       }
       e->ty.kind = OL_TY_BOOL;
       return 1;
+    case OL_EX_BNOT:
+      if (!resolve_expr(S, e->u.bnot.inner)) return 0;
+      if (!type_is_binary(&e->u.bnot.inner->ty)) {
+        sema_err(S, e->line, "~ requires binary type operand");
+        return 0;
+      }
+      type_copy(&e->ty, &e->u.bnot.inner->ty);
+      return 1;
     case OL_EX_BINARY: {
+      OlBinOp op = e->u.binary.op;
       if (!resolve_expr(S, e->u.binary.left) || !resolve_expr(S, e->u.binary.right)) return 0;
-      if (e->u.binary.op == OL_BIN_AND || e->u.binary.op == OL_BIN_OR) {
-        if (!type_is_condition(&e->u.binary.left->ty) || !type_is_condition(&e->u.binary.right->ty)) {
-          sema_err(S, e->line, "&& / || require bool or int operands");
+      /* logical && || : strict bool */
+      if (op == OL_BIN_AND || op == OL_BIN_OR) {
+        if (e->u.binary.left->ty.kind != OL_TY_BOOL || e->u.binary.right->ty.kind != OL_TY_BOOL) {
+          sema_err(S, e->line, "&& / || require bool operands");
           return 0;
         }
         e->ty.kind = OL_TY_BOOL;
         return 1;
       }
+      /* bitwise ops: strict binary, same type */
+      if (op == OL_BIN_BAND || op == OL_BIN_BOR || op == OL_BIN_BXOR || op == OL_BIN_SHL || op == OL_BIN_SHR) {
+        if (!type_is_binary(&e->u.binary.left->ty) || !type_is_binary(&e->u.binary.right->ty)) {
+          sema_err(S, e->line, "bitwise ops require binary type operands");
+          return 0;
+        }
+        if (!type_eq(&e->u.binary.left->ty, &e->u.binary.right->ty)) {
+          sema_err(S, e->line, "bitwise operand type mismatch");
+          return 0;
+        }
+        type_copy(&e->ty, &e->u.binary.left->ty);
+        return 1;
+      }
+      /* all other ops require same type */
       if (!type_eq(&e->u.binary.left->ty, &e->u.binary.right->ty)) {
         sema_err(S, e->line, "binary operand type mismatch");
         return 0;
       }
-      if (e->u.binary.op <= OL_BIN_MOD) {
-        if (!type_is_int(&e->u.binary.left->ty)) {
-          sema_err(S, e->line, "arithmetic on non-int");
-          return 0;
-        }
-        type_copy(&e->ty, &e->u.binary.left->ty);
-      } else {
-        if (!type_is_int(&e->u.binary.left->ty)) {
-          sema_err(S, e->line, "compare on non-int");
+      /* == != : all scalar types */
+      if (op == OL_BIN_EQ || op == OL_BIN_NE) {
+        if (!type_is_scalar(&e->u.binary.left->ty)) {
+          sema_err(S, e->line, "== / != require scalar operands");
           return 0;
         }
         e->ty.kind = OL_TY_BOOL;
+        return 1;
       }
-      return 1;
+      /* < > <= >= : int and float only (not binary) */
+      if (op == OL_BIN_LT || op == OL_BIN_GT || op == OL_BIN_LE || op == OL_BIN_GE) {
+        if (!type_is_int(&e->u.binary.left->ty) && !type_is_float(&e->u.binary.left->ty)) {
+          sema_err(S, e->line, "ordered compare requires int or float operands");
+          return 0;
+        }
+        e->ty.kind = OL_TY_BOOL;
+        return 1;
+      }
+      /* + - * : int, float, binary */
+      if (op == OL_BIN_ADD || op == OL_BIN_SUB || op == OL_BIN_MUL) {
+        if (!type_is_int(&e->u.binary.left->ty) && !type_is_float(&e->u.binary.left->ty) && !type_is_binary(&e->u.binary.left->ty)) {
+          sema_err(S, e->line, "arithmetic requires int, float, or binary operands");
+          return 0;
+        }
+        type_copy(&e->ty, &e->u.binary.left->ty);
+        return 1;
+      }
+      /* / : int, float (no %), binary */
+      if (op == OL_BIN_DIV) {
+        if (!type_is_int(&e->u.binary.left->ty) && !type_is_float(&e->u.binary.left->ty) && !type_is_binary(&e->u.binary.left->ty)) {
+          sema_err(S, e->line, "division requires int, float, or binary operands");
+          return 0;
+        }
+        type_copy(&e->ty, &e->u.binary.left->ty);
+        return 1;
+      }
+      /* % : int and binary only (not float) */
+      if (op == OL_BIN_MOD) {
+        if (!type_is_int(&e->u.binary.left->ty) && !type_is_binary(&e->u.binary.left->ty)) {
+          sema_err(S, e->line, "modulo requires int or binary operands");
+          return 0;
+        }
+        type_copy(&e->ty, &e->u.binary.left->ty);
+        return 1;
+      }
+      sema_err(S, e->line, "unknown binary op");
+      return 0;
     }
     case OL_EX_CALL: {
       const OlExternDecl *ex = ol_program_get_extern(S->prog, e->u.call.callee);
@@ -392,10 +503,35 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
         return 0;
       }
       if (!can_explicit_cast(&e->u.cast_.inner->ty, &e->u.cast_.to)) {
-        sema_err(S, e->line, "invalid explicit cast");
+        sema_err(S, e->line, "invalid cast (use reinterpret for same-size type rebinding)");
         return 0;
       }
       e->ty = e->u.cast_.to;
+      return 1;
+    }
+    case OL_EX_REINTERPRET: {
+      if (!resolve_expr(S, e->u.reinterpret_.inner)) return 0;
+      if (!type_is_valid(S->prog, &e->u.reinterpret_.to) || e->u.reinterpret_.to.kind == OL_TY_VOID) {
+        sema_err(S, e->line, "invalid reinterpret target type");
+        return 0;
+      }
+      if (e->u.reinterpret_.inner->ty.kind == OL_TY_BOOL || e->u.reinterpret_.to.kind == OL_TY_BOOL) {
+        sema_err(S, e->line, "bool cannot participate in reinterpret");
+        return 0;
+      }
+      if (e->u.reinterpret_.inner->ty.kind == OL_TY_ALIAS || e->u.reinterpret_.to.kind == OL_TY_ALIAS) {
+        sema_err(S, e->line, "reinterpret not supported for aggregate types");
+        return 0;
+      }
+      {
+        uint32_t from_sz = ty_size_bytes(S->prog, &e->u.reinterpret_.inner->ty);
+        uint32_t to_sz = ty_size_bytes(S->prog, &e->u.reinterpret_.to);
+        if (from_sz != to_sz || from_sz == 0) {
+          sema_err(S, e->line, "reinterpret requires same bit width");
+          return 0;
+        }
+      }
+      e->ty = e->u.reinterpret_.to;
       return 1;
     }
     case OL_EX_ADDR: {
@@ -613,7 +749,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
       case OL_ST_IF:
         if (!resolve_expr(S, s->u.if_.cond)) return 0;
         if (!type_is_condition(&s->u.if_.cond->ty)) {
-          sema_err(S, s->line, "if condition must be bool or int");
+          sema_err(S, s->line, "if condition must be bool");
           return 0;
         }
         enter_scope(S);
@@ -634,7 +770,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
       case OL_ST_WHILE:
         if (!resolve_expr(S, s->u.while_.cond)) return 0;
         if (!type_is_condition(&s->u.while_.cond->ty)) {
-          sema_err(S, s->line, "while condition must be bool or int");
+          sema_err(S, s->line, "while condition must be bool");
           return 0;
         }
         enter_scope(S);

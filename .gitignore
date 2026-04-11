@@ -1,6 +1,7 @@
 # Build output
 bin/
 examples/out/
+*.olc.d/
 
 # Test artifacts
 tests/*.elf

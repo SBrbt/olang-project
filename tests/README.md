@@ -10,64 +10,50 @@
 make check
 ```
 
-### Test Structure
+Runs, in order: link-script unit test (`bin/link_script_test`), alinker, kasm, preprocessor, then OLang integration (`examples/olc` over all `examples/programs/ex_*.ol`, `tests/olang/olang_*.ol`, multi-file link, plus expected-failure checks).
+
+### Quick subset (OLang + examples only)
+
+`tests/check_examples.sh` does `make clean && make all`, then only the two OLang scripts under `tests/olang/`. It does **not** run linker, kasm, or preproc tests — use `make check` before a release.
+
+### Layout
 
 ```
 tests/
-├── README.md                 # This file
-├── run_programs_olc.sh       # 30+ example programs test
-├── check_olang_bounds.sh     # Edge case tests
-├── alinker_*.sh              # Linker tests
-├── kasm_*.sh                 # Assembler tests
-├── fixtures/                 # Test fixtures
-├── olang_*.ol                # Edge case test files
-└── olang_fail/               # Expected-failure tests
+├── README.md
+├── check_examples.sh          # fast path: olang integration only (after full build)
+├── link_script_test.c         # link script parser; Makefile builds bin/link_script_test
+├── olang/
+│   ├── run_programs_olc.sh    # ex_*.ol + tests/olang/olang_*.ol + multi_file link
+│   ├── check_olang_bounds.sh  # expected compile failures (olang_fail/)
+│   ├── olang_*.ol             # extra programs (paths listed in run_programs_olc.sh)
+│   └── olang_fail/            # inputs that must fail compilation
+├── alinker/
+│   ├── smoke.sh
+│   ├── pc64.sh
+│   └── multi_obj.sh
+├── kasm/
+│   ├── label_comment.sh
+│   └── bytes_tab.sh
+├── preproc/
+│   └── include.sh             # olprep #include
+└── fixtures/                  # shared data for the scripts above
 ```
 
-### Test Categories
+### By component
 
-#### Regression Tests
+| Area | Role |
+|------|------|
+| **OLang** | `run_programs_olc.sh` compiles and runs every `ex_*.ol`, then `olang_*.ol` under `tests/olang/`, then multi-file link (see script output lines). `check_olang_bounds.sh` checks `olang_fail/*.ol` must not compile. |
+| **alinker** | `smoke.sh`, `pc64.sh`, `multi_obj.sh` — fixture `.oobj` + JSON link scripts under `fixtures/`. |
+| **kasm** | Assembler edge cases; temp dirs under `fixtures/`. |
+| **preproc** | `include.sh` — `#include "..."` matches golden `expected.ol`. |
+| **link script** | `link_script_test.c` exercises the C parser used by alinker. |
 
-`run_programs_olc.sh` — Compile and run all `examples/programs/ex_*.ol`:
+### Adding tests
 
-```bash
-bash tests/run_programs_olc.sh
-# OK: run_programs_olc.sh (30 programs)
-```
-
-#### Edge Case Tests
-
-`check_olang_bounds.sh` — Test compiler edge cases:
-
-| Test | Description |
-|------|-------------|
-| `olang_aggregate_copy.ol` | Aggregate value copy |
-| `olang_nested_struct.ol` | Nested struct access |
-| `olang_u64_max.ol` | u64 maximum range |
-
-#### Failure Tests
-
-`olang_fail/` — Programs expected to fail compilation:
-
-- `fail_long_ident.ol` — Identifier too long
-- `fail_unterminated_string.ol` — Unterminated string
-
-#### Linker Tests
-
-- `alinker_smoke.sh` — Basic functionality
-- `alinker_pc64.sh` — PC-relative addressing
-- `alinker_multi_obj.sh` — Multi-object linking
-
-#### Assembler Tests
-
-- `kasm_label_comment.sh` — Labels and comments
-- `kasm_bytes_tab.sh` — Byte tables
-
-### Adding New Tests
-
-1. Create test program `tests/my_test.ol`
-2. Add to existing test script or create new one
-3. Reference in `Makefile` `check` target
+1. New example program: add `examples/programs/ex_*.ol` (picked up by glob). For extra programs under `tests/olang/`, add the path to the `TESTS_OLANG_SRC` array in `run_programs_olc.sh` (must exit 0). Extend the same script if you need non-default exit code or stdout checks.
+2. New component-level test: add a script under the matching subdirectory, put fixtures under `fixtures/<name>/`, add one `bash tests/...` line to the appropriate `check-*` rule in the top-level `Makefile`.
 
 ---
 

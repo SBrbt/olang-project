@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# olc — Linux x86_64 driver: invokes bin/olang, kasm, alinker; reads link and kasm presets from examples/linux_x86_64/.
-# This script is the complete implementation (not a wrapper); other platforms can copy this script and modify PLATFORM path.
+# olc — Linux x86_64 driver: olprep (preprocess) -> bin/olang, kasm, alinker; reads link and kasm presets from examples/linux_x86_64/.
+# Intermediate files are kept under <basename>.olc.d/ next to the output ELF (not deleted).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,6 +9,7 @@ EXAMPLES="$TOOLCHAIN_ROOT/examples"
 PLATFORM="$EXAMPLES/linux_x86_64"
 export OLANG_TOOLCHAIN_ROOT="$TOOLCHAIN_ROOT"
 
+OLPREP="$TOOLCHAIN_ROOT/bin/olprep"
 OLANG="$TOOLCHAIN_ROOT/bin/olang"
 KASM="$TOOLCHAIN_ROOT/bin/kasm"
 ALINKER="$TOOLCHAIN_ROOT/bin/alinker"
@@ -24,15 +25,16 @@ usage() {
   cat <<'EOF'
 usage: olc -o <out.elf> <a.ol> [b.ol ...]
        olc -h
-  Linux x86_64 ELF: each .ol -> .oobj, then link with runtime.
+  Linux x86_64 ELF: each .ol -> olprep -> .oobj, then link with runtime.
   Preset paths: examples/linux_x86_64/{link/exe.json, asm/**}
-  Requires: toolchain/ make to generate bin/olang, kasm, alinker.
+  Work directory: <dir(out.elf)>/<basename(out.elf)>.olc.d/ (pp*.ol, u*.oobj, runtime .oobj)
+  Requires: make to generate bin/olprep, olang, kasm, alinker.
 EOF
 }
 
-for x in "$OLANG" "$KASM" "$ALINKER"; do
+for x in "$OLPREP" "$OLANG" "$KASM" "$ALINKER"; do
   if [[ ! -x "$x" ]]; then
-    echo "olc: missing $x (cd toolchain && make)" >&2
+    echo "olc: missing $x (run make from repo root)" >&2
     exit 1
   fi
 done
@@ -75,22 +77,25 @@ if [[ -z "${out_elf:-}" ]] || [[ ${#sources[@]} -eq 0 ]]; then
   exit 2
 fi
 
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/olc.XXXXXX")
-trap 'rm -rf "${tmpdir:-}"' EXIT
+out_dir=$(dirname -- "$out_elf")
+out_base=$(basename -- "$out_elf" .elf)
+WORKDIR=$(cd "$out_dir" && echo "$(pwd)/${out_base}.olc.d")
+mkdir -p "$WORKDIR"
 
 for i in "${!sources[@]}"; do
-  "$OLANG" --in "${sources[$i]}" -o "$tmpdir/u${i}.oobj"
+  "$OLPREP" --in "${sources[$i]}" -o "$WORKDIR/pp${i}.ol" -I "$EXAMPLES/include"
+  "$OLANG" --in "$WORKDIR/pp${i}.ol" -o "$WORKDIR/u${i}.oobj"
 done
 
-"$KASM" --in "$KRT_KASM" -o "$tmpdir/krt.oobj"
-"$KASM" --in "$OLRT_KASM" -o "$tmpdir/olrt.oobj"
-"$KASM" --in "$POSIX_KASM" -o "$tmpdir/libposix.oobj"
+"$KASM" --in "$KRT_KASM" -o "$WORKDIR/krt.oobj"
+"$KASM" --in "$OLRT_KASM" -o "$WORKDIR/olrt.oobj"
+"$KASM" --in "$POSIX_KASM" -o "$WORKDIR/libposix.oobj"
 
 link_cmd=("$ALINKER" "--script" "$EXE_JSON" "-o" "$out_elf" "--")
 for i in "${!sources[@]}"; do
-  link_cmd+=("$tmpdir/u${i}.oobj")
+  link_cmd+=("$WORKDIR/u${i}.oobj")
 done
-link_cmd+=("$tmpdir/libposix.oobj" "$tmpdir/krt.oobj" "$tmpdir/olrt.oobj")
+link_cmd+=("$WORKDIR/libposix.oobj" "$WORKDIR/krt.oobj" "$WORKDIR/olrt.oobj")
 "${link_cmd[@]}"
 
 chmod 0755 "$out_elf" || {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # .bytes with tab separator must work.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/bin/kasm"
 TMP="$ROOT/tests/fixtures/kasm_bytes_tab_tmp"
 mkdir -p "$TMP"

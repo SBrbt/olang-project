@@ -63,8 +63,12 @@ static int expect(ParseCtx *C, OlTok t) {
 }
 
 static int is_builtin_type_tok(OlTok t) {
-  return t == TOK_KW_VOID || t == TOK_KW_BOOL || t == TOK_KW_U8 || t == TOK_KW_I32 || t == TOK_KW_U32 || t == TOK_KW_I64 ||
-         t == TOK_KW_U64 || t == TOK_KW_PTR;
+  return t == TOK_KW_VOID || t == TOK_KW_BOOL ||
+         t == TOK_KW_U8 || t == TOK_KW_I8 || t == TOK_KW_U16 || t == TOK_KW_I16 ||
+         t == TOK_KW_I32 || t == TOK_KW_U32 || t == TOK_KW_I64 || t == TOK_KW_U64 ||
+         t == TOK_KW_F16 || t == TOK_KW_F32 || t == TOK_KW_F64 ||
+         t == TOK_KW_B8 || t == TOK_KW_B16 || t == TOK_KW_B32 || t == TOK_KW_B64 ||
+         t == TOK_KW_PTR;
 }
 
 static int parse_type_ref(ParseCtx *C, OlTypeRef *out) {
@@ -81,6 +85,21 @@ static int parse_type_ref(ParseCtx *C, OlTypeRef *out) {
   if (C->L->tok == TOK_KW_U8) {
     if (!lex_next(C)) return 0;
     out->kind = OL_TY_U8;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_I8) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_I8;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_U16) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_U16;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_I16) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_I16;
     return 1;
   }
   if (C->L->tok == TOK_KW_I32) {
@@ -101,6 +120,41 @@ static int parse_type_ref(ParseCtx *C, OlTypeRef *out) {
   if (C->L->tok == TOK_KW_U64) {
     if (!lex_next(C)) return 0;
     out->kind = OL_TY_U64;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_F16) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_F16;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_F32) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_F32;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_F64) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_F64;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_B8) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_B8;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_B16) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_B16;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_B32) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_B32;
+    return 1;
+  }
+  if (C->L->tok == TOK_KW_B64) {
+    if (!lex_next(C)) return 0;
+    out->kind = OL_TY_B64;
     return 1;
   }
   if (C->L->tok == TOK_KW_PTR) {
@@ -146,6 +200,7 @@ static OlExpr *parse_expr(ParseCtx *C);
 static OlExpr *parse_unary(ParseCtx *C);
 static OlExpr *parse_mul(ParseCtx *C);
 static OlExpr *parse_add(ParseCtx *C);
+static OlExpr *parse_shift(ParseCtx *C);
 
 static OlExpr *parse_primary(ParseCtx *C) {
   int line = C->L->line;
@@ -154,6 +209,14 @@ static OlExpr *parse_primary(ParseCtx *C) {
     if (!e) return NULL;
     e->u.int_.int_val = C->L->int_val;
     e->u.int_.int_suffix = C->L->int_suffix;
+    if (!lex_next(C)) return NULL;
+    return e;
+  }
+  if (C->L->tok == TOK_FLOAT) {
+    OlExpr *e = new_expr(OL_EX_FLOAT, line);
+    if (!e) return NULL;
+    e->u.float_.float_val = C->L->float_val;
+    e->u.float_.float_suffix = C->L->float_suffix;
     if (!lex_next(C)) return NULL;
     return e;
   }
@@ -208,6 +271,31 @@ static OlExpr *parse_primary(ParseCtx *C) {
       return NULL;
     }
     e->u.cast_.inner = in;
+    if (!expect(C, TOK_RPAREN)) {
+      free_expr(e);
+      return NULL;
+    }
+    return e;
+  }
+  if (C->L->tok == TOK_KW_REINTERPRET) {
+    OlExpr *in;
+    OlExpr *e = new_expr(OL_EX_REINTERPRET, line);
+    if (!e) return NULL;
+    if (!lex_next(C)) return NULL;
+    if (!parse_type_after_lt(C, &e->u.reinterpret_.to)) {
+      free(e);
+      return NULL;
+    }
+    if (!expect(C, TOK_LPAREN)) {
+      free(e);
+      return NULL;
+    }
+    in = parse_expr(C);
+    if (!in) {
+      free(e);
+      return NULL;
+    }
+    e->u.reinterpret_.inner = in;
     if (!expect(C, TOK_RPAREN)) {
       free_expr(e);
       return NULL;
@@ -479,59 +567,121 @@ static OlExpr *parse_add_rest(ParseCtx *C, OlExpr *l) {
   return l;
 }
 
-static OlExpr *parse_cmp_rest(ParseCtx *C, OlExpr *l) {
-  while (C->L->tok == TOK_EQEQ || C->L->tok == TOK_NE || C->L->tok == TOK_LT || C->L->tok == TOK_GT || C->L->tok == TOK_LE ||
-         C->L->tok == TOK_GE) {
-    OlBinOp op = OL_BIN_EQ;
+static OlExpr *parse_shift_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_SHL || C->L->tok == TOK_SHR) {
+    OlBinOp op = (C->L->tok == TOK_SHL) ? OL_BIN_SHL : OL_BIN_SHR;
     int line = C->L->line;
-    if (C->L->tok == TOK_NE) op = OL_BIN_NE;
-    else if (C->L->tok == TOK_LT)
-      op = OL_BIN_LT;
-    else if (C->L->tok == TOK_GT)
-      op = OL_BIN_GT;
-    else if (C->L->tok == TOK_LE)
-      op = OL_BIN_LE;
-    else if (C->L->tok == TOK_GE)
-      op = OL_BIN_GE;
+    OlExpr *r, *p;
     if (!lex_next(C)) return NULL;
-    {
-      OlExpr *r = parse_add(C);
-      OlExpr *p;
-      if (!r) {
-        free_expr(l);
-        return NULL;
-      }
+    r = parse_add(C);
+    if (!r) { free_expr(l); return NULL; }
+    p = new_expr(OL_EX_BINARY, line);
+    if (!p) { free_expr(l); free_expr(r); return NULL; }
+    p->u.binary.op = op; p->u.binary.left = l; p->u.binary.right = r;
+    l = p;
+  }
+  return l;
+}
+
+static OlExpr *parse_cmp_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_LT || C->L->tok == TOK_GT || C->L->tok == TOK_LE || C->L->tok == TOK_GE) {
+    OlBinOp op = OL_BIN_LT;
+    int line = C->L->line;
+    if (C->L->tok == TOK_GT) op = OL_BIN_GT;
+    else if (C->L->tok == TOK_LE) op = OL_BIN_LE;
+    else if (C->L->tok == TOK_GE) op = OL_BIN_GE;
+    if (!lex_next(C)) return NULL;
+    { OlExpr *r = parse_shift(C), *p;
+      if (!r) { free_expr(l); return NULL; }
       p = new_expr(OL_EX_BINARY, line);
-      if (!p) {
-        free_expr(l);
-        free_expr(r);
-        return NULL;
-      }
-      p->u.binary.op = op;
-      p->u.binary.left = l;
-      p->u.binary.right = r;
-      l = p;
-    }
+      if (!p) { free_expr(l); free_expr(r); return NULL; }
+      p->u.binary.op = op; p->u.binary.left = l; p->u.binary.right = r;
+      l = p; }
+  }
+  return l;
+}
+
+static OlExpr *parse_eq_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_EQEQ || C->L->tok == TOK_NE) {
+    OlBinOp op = (C->L->tok == TOK_EQEQ) ? OL_BIN_EQ : OL_BIN_NE;
+    int line = C->L->line;
+    OlExpr *r, *p;
+    if (!lex_next(C)) return NULL;
+    r = parse_shift(C);
+    if (!r) { free_expr(l); return NULL; }
+    r = parse_cmp_rest(C, r);
+    if (!r) { free_expr(l); return NULL; }
+    p = new_expr(OL_EX_BINARY, line);
+    if (!p) { free_expr(l); free_expr(r); return NULL; }
+    p->u.binary.op = op; p->u.binary.left = l; p->u.binary.right = r;
+    l = p;
   }
   return l;
 }
 
 static OlExpr *parse_cmp(ParseCtx *C);
+static OlExpr *parse_eq(ParseCtx *C);
+static OlExpr *parse_bitand(ParseCtx *C);
+static OlExpr *parse_bitxor(ParseCtx *C);
+static OlExpr *parse_bitor(ParseCtx *C);
 static OlExpr *parse_and(ParseCtx *C);
 static OlExpr *parse_or(ParseCtx *C);
+
+static OlExpr *parse_bitand_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_AMP) {
+    int line = C->L->line;
+    OlExpr *r, *p;
+    if (!lex_next(C)) return NULL;
+    r = parse_eq(C);
+    if (!r) { free_expr(l); return NULL; }
+    p = new_expr(OL_EX_BINARY, line);
+    if (!p) { free_expr(l); free_expr(r); return NULL; }
+    p->u.binary.op = OL_BIN_BAND; p->u.binary.left = l; p->u.binary.right = r;
+    l = p;
+  }
+  return l;
+}
+
+static OlExpr *parse_bitxor_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_CARET) {
+    int line = C->L->line;
+    OlExpr *r, *p;
+    if (!lex_next(C)) return NULL;
+    r = parse_bitand(C);
+    if (!r) { free_expr(l); return NULL; }
+    p = new_expr(OL_EX_BINARY, line);
+    if (!p) { free_expr(l); free_expr(r); return NULL; }
+    p->u.binary.op = OL_BIN_BXOR; p->u.binary.left = l; p->u.binary.right = r;
+    l = p;
+  }
+  return l;
+}
+
+static OlExpr *parse_bitor_rest(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_PIPE) {
+    int line = C->L->line;
+    OlExpr *r, *p;
+    if (!lex_next(C)) return NULL;
+    r = parse_bitxor(C);
+    if (!r) { free_expr(l); return NULL; }
+    p = new_expr(OL_EX_BINARY, line);
+    if (!p) { free_expr(l); free_expr(r); return NULL; }
+    p->u.binary.op = OL_BIN_BOR; p->u.binary.left = l; p->u.binary.right = r;
+    l = p;
+  }
+  return l;
+}
 
 static OlExpr *parse_and_rest(ParseCtx *C, OlExpr *l) {
   while (C->L->tok == TOK_AMPAMP) {
     int line = C->L->line;
     OlExpr *r, *p;
     if (!lex_next(C)) return NULL;
-    r = parse_cmp(C);
+    r = parse_bitor(C);
     if (!r) { free_expr(l); return NULL; }
     p = new_expr(OL_EX_BINARY, line);
     if (!p) { free_expr(l); free_expr(r); return NULL; }
-    p->u.binary.op = OL_BIN_AND;
-    p->u.binary.left = l;
-    p->u.binary.right = r;
+    p->u.binary.op = OL_BIN_AND; p->u.binary.left = l; p->u.binary.right = r;
     l = p;
   }
   return l;
@@ -542,15 +692,13 @@ static OlExpr *parse_or_rest(ParseCtx *C, OlExpr *l) {
     int line = C->L->line;
     OlExpr *r, *p;
     if (!lex_next(C)) return NULL;
-    r = parse_cmp(C);
+    r = parse_bitor(C);
     if (!r) { free_expr(l); return NULL; }
     r = parse_and_rest(C, r);
     if (!r) { free_expr(l); return NULL; }
     p = new_expr(OL_EX_BINARY, line);
     if (!p) { free_expr(l); free_expr(r); return NULL; }
-    p->u.binary.op = OL_BIN_OR;
-    p->u.binary.left = l;
-    p->u.binary.right = r;
+    p->u.binary.op = OL_BIN_OR; p->u.binary.left = l; p->u.binary.right = r;
     l = p;
   }
   return l;
@@ -565,7 +713,17 @@ static OlExpr *parse_expr_from_atom(ParseCtx *C, OlExpr *atom) {
   if (!e) return NULL;
   e = parse_add_rest(C, e);
   if (!e) return NULL;
+  e = parse_shift_rest(C, e);
+  if (!e) return NULL;
   e = parse_cmp_rest(C, e);
+  if (!e) return NULL;
+  e = parse_eq_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitand_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitxor_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitor_rest(C, e);
   if (!e) return NULL;
   e = parse_and_rest(C, e);
   if (!e) return NULL;
@@ -602,6 +760,17 @@ static OlExpr *parse_unary(ParseCtx *C) {
     e->u.not_.inner = inner;
     return e;
   }
+  if (C->L->tok == TOK_TILDE) {
+    int line = C->L->line;
+    OlExpr *inner, *e;
+    if (!lex_next(C)) return NULL;
+    inner = parse_unary(C);
+    if (!inner) return NULL;
+    e = new_expr(OL_EX_BNOT, line);
+    if (!e) { free_expr(inner); return NULL; }
+    e->u.bnot.inner = inner;
+    return e;
+  }
   return parse_postfix(C);
 }
 
@@ -617,14 +786,44 @@ static OlExpr *parse_add(ParseCtx *C) {
   return parse_add_rest(C, l);
 }
 
-static OlExpr *parse_cmp(ParseCtx *C) {
+static OlExpr *parse_shift(ParseCtx *C) {
   OlExpr *l = parse_add(C);
+  if (!l) return NULL;
+  return parse_shift_rest(C, l);
+}
+
+static OlExpr *parse_cmp(ParseCtx *C) {
+  OlExpr *l = parse_shift(C);
   if (!l) return NULL;
   return parse_cmp_rest(C, l);
 }
 
-static OlExpr *parse_and(ParseCtx *C) {
+static OlExpr *parse_eq(ParseCtx *C) {
   OlExpr *l = parse_cmp(C);
+  if (!l) return NULL;
+  return parse_eq_rest(C, l);
+}
+
+static OlExpr *parse_bitand(ParseCtx *C) {
+  OlExpr *l = parse_eq(C);
+  if (!l) return NULL;
+  return parse_bitand_rest(C, l);
+}
+
+static OlExpr *parse_bitxor(ParseCtx *C) {
+  OlExpr *l = parse_bitand(C);
+  if (!l) return NULL;
+  return parse_bitxor_rest(C, l);
+}
+
+static OlExpr *parse_bitor(ParseCtx *C) {
+  OlExpr *l = parse_bitxor(C);
+  if (!l) return NULL;
+  return parse_bitor_rest(C, l);
+}
+
+static OlExpr *parse_and(ParseCtx *C) {
+  OlExpr *l = parse_bitor(C);
   if (!l) return NULL;
   return parse_and_rest(C, l);
 }
@@ -935,8 +1134,13 @@ static OlStmt *parse_stmt(ParseCtx *C) {
 }
 
 static int is_builtin_type_name(const char *t) {
-  return strcmp(t, "bool") == 0 || strcmp(t, "u8") == 0 || strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0 ||
-         strcmp(t, "i64") == 0 || strcmp(t, "u64") == 0 || strcmp(t, "ptr") == 0;
+  return strcmp(t, "bool") == 0 || strcmp(t, "u8") == 0 || strcmp(t, "i8") == 0 ||
+         strcmp(t, "u16") == 0 || strcmp(t, "i16") == 0 ||
+         strcmp(t, "i32") == 0 || strcmp(t, "u32") == 0 ||
+         strcmp(t, "i64") == 0 || strcmp(t, "u64") == 0 ||
+         strcmp(t, "f16") == 0 || strcmp(t, "f32") == 0 || strcmp(t, "f64") == 0 ||
+         strcmp(t, "b8") == 0 || strcmp(t, "b16") == 0 || strcmp(t, "b32") == 0 || strcmp(t, "b64") == 0 ||
+         strcmp(t, "ptr") == 0;
 }
 
 static int parse_typedef(ParseCtx *C) {
@@ -971,18 +1175,22 @@ static int parse_typedef(ParseCtx *C) {
       }
       if (is_builtin_type_tok(C->L->tok)) {
         if (C->L->tok == TOK_KW_BOOL) snprintf(ftype, sizeof(ftype), "bool");
-        else if (C->L->tok == TOK_KW_U8)
-          snprintf(ftype, sizeof(ftype), "u8");
-        else if (C->L->tok == TOK_KW_I32)
-          snprintf(ftype, sizeof(ftype), "i32");
-        else if (C->L->tok == TOK_KW_U32)
-          snprintf(ftype, sizeof(ftype), "u32");
-        else if (C->L->tok == TOK_KW_I64)
-          snprintf(ftype, sizeof(ftype), "i64");
-        else if (C->L->tok == TOK_KW_U64)
-          snprintf(ftype, sizeof(ftype), "u64");
-        else if (C->L->tok == TOK_KW_PTR)
-          snprintf(ftype, sizeof(ftype), "ptr");
+        else if (C->L->tok == TOK_KW_U8) snprintf(ftype, sizeof(ftype), "u8");
+        else if (C->L->tok == TOK_KW_I8) snprintf(ftype, sizeof(ftype), "i8");
+        else if (C->L->tok == TOK_KW_U16) snprintf(ftype, sizeof(ftype), "u16");
+        else if (C->L->tok == TOK_KW_I16) snprintf(ftype, sizeof(ftype), "i16");
+        else if (C->L->tok == TOK_KW_I32) snprintf(ftype, sizeof(ftype), "i32");
+        else if (C->L->tok == TOK_KW_U32) snprintf(ftype, sizeof(ftype), "u32");
+        else if (C->L->tok == TOK_KW_I64) snprintf(ftype, sizeof(ftype), "i64");
+        else if (C->L->tok == TOK_KW_U64) snprintf(ftype, sizeof(ftype), "u64");
+        else if (C->L->tok == TOK_KW_F16) snprintf(ftype, sizeof(ftype), "f16");
+        else if (C->L->tok == TOK_KW_F32) snprintf(ftype, sizeof(ftype), "f32");
+        else if (C->L->tok == TOK_KW_F64) snprintf(ftype, sizeof(ftype), "f64");
+        else if (C->L->tok == TOK_KW_B8) snprintf(ftype, sizeof(ftype), "b8");
+        else if (C->L->tok == TOK_KW_B16) snprintf(ftype, sizeof(ftype), "b16");
+        else if (C->L->tok == TOK_KW_B32) snprintf(ftype, sizeof(ftype), "b32");
+        else if (C->L->tok == TOK_KW_B64) snprintf(ftype, sizeof(ftype), "b64");
+        else if (C->L->tok == TOK_KW_PTR) snprintf(ftype, sizeof(ftype), "ptr");
         else {
           errf(C, "bad field type");
           return 0;
@@ -1051,22 +1259,24 @@ static int parse_typedef(ParseCtx *C) {
     if (!expect(C, TOK_LT)) return 0;
     if (C->L->tok == TOK_IDENT)
       snprintf(elem, sizeof(elem), "%s", C->L->ident);
-    else if (C->L->tok == TOK_KW_BOOL) {
-      snprintf(elem, sizeof(elem), "bool");
-    } else if (C->L->tok == TOK_KW_U8) {
-      snprintf(elem, sizeof(elem), "u8");
-    } else if (C->L->tok == TOK_KW_U32) {
-      snprintf(elem, sizeof(elem), "u32");
-    } else if (C->L->tok == TOK_KW_U64) {
-      snprintf(elem, sizeof(elem), "u64");
-    }
-    else if (C->L->tok == TOK_KW_I32) {
-      snprintf(elem, sizeof(elem), "i32");
-    } else if (C->L->tok == TOK_KW_I64) {
-      snprintf(elem, sizeof(elem), "i64");
-    } else if (C->L->tok == TOK_KW_PTR) {
-      snprintf(elem, sizeof(elem), "ptr");
-    } else {
+    else if (C->L->tok == TOK_KW_BOOL) snprintf(elem, sizeof(elem), "bool");
+    else if (C->L->tok == TOK_KW_U8) snprintf(elem, sizeof(elem), "u8");
+    else if (C->L->tok == TOK_KW_I8) snprintf(elem, sizeof(elem), "i8");
+    else if (C->L->tok == TOK_KW_U16) snprintf(elem, sizeof(elem), "u16");
+    else if (C->L->tok == TOK_KW_I16) snprintf(elem, sizeof(elem), "i16");
+    else if (C->L->tok == TOK_KW_I32) snprintf(elem, sizeof(elem), "i32");
+    else if (C->L->tok == TOK_KW_U32) snprintf(elem, sizeof(elem), "u32");
+    else if (C->L->tok == TOK_KW_I64) snprintf(elem, sizeof(elem), "i64");
+    else if (C->L->tok == TOK_KW_U64) snprintf(elem, sizeof(elem), "u64");
+    else if (C->L->tok == TOK_KW_F16) snprintf(elem, sizeof(elem), "f16");
+    else if (C->L->tok == TOK_KW_F32) snprintf(elem, sizeof(elem), "f32");
+    else if (C->L->tok == TOK_KW_F64) snprintf(elem, sizeof(elem), "f64");
+    else if (C->L->tok == TOK_KW_B8) snprintf(elem, sizeof(elem), "b8");
+    else if (C->L->tok == TOK_KW_B16) snprintf(elem, sizeof(elem), "b16");
+    else if (C->L->tok == TOK_KW_B32) snprintf(elem, sizeof(elem), "b32");
+    else if (C->L->tok == TOK_KW_B64) snprintf(elem, sizeof(elem), "b64");
+    else if (C->L->tok == TOK_KW_PTR) snprintf(elem, sizeof(elem), "ptr");
+    else {
       errf(C, "array elem");
       return 0;
     }
@@ -1477,6 +1687,13 @@ static void free_expr(OlExpr *e) {
       free_expr(e->u.index_.arr);
       free_expr(e->u.index_.index_expr);
       break;
+    case OL_EX_BNOT:
+      free_expr(e->u.bnot.inner);
+      break;
+    case OL_EX_REINTERPRET:
+      free_expr(e->u.reinterpret_.inner);
+      break;
+    case OL_EX_FLOAT:
     default:
       break;
   }

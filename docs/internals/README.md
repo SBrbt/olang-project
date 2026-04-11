@@ -17,6 +17,7 @@ Documentation for contributors.
 | Object Format | [specs/oobj.md](specs/oobj.md) |
 | ELF Layout | [specs/elf-layout.md](specs/elf-layout.md) |
 | Syntax Spec | [specs/olang-syntax.md](specs/olang-syntax.md) |
+| Preprocessor | [preproc.md](preproc.md) |
 
 ### Source Map
 
@@ -42,6 +43,10 @@ alinker/
 └── src/
     ├── link_core.c     # Linking core
     └── main.c          # CLI
+
+preproc/
+└── src/
+    └── main.c          # olprep (#include only)
 ```
 
 ### Development Workflow
@@ -49,7 +54,7 @@ alinker/
 1. **Modify** → `olang/src/`, `kasm/src/`, etc.
 2. **Build** → `make all`
 3. **Test** → `make check`
-4. **Verify** → `bash tests/run_programs_olc.sh`
+4. **Verify** → `bash tests/olang/run_programs_olc.sh`
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Two .oobj merged: ABS64 cross-file relocation for 'helper'.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/bin/alinker"
 FIX="$ROOT/tests/fixtures/alinker_multi_obj"
 OUT="$ROOT/tests/fixtures/alinker_multi_obj_out.bin"

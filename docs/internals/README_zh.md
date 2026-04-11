@@ -17,6 +17,7 @@
 | 对象格式 | [specs/oobj_zh.md](specs/oobj_zh.md) |
 | ELF 布局 | [specs/elf-layout_zh.md](specs/elf-layout_zh.md) |
 | 语法规格 | [specs/olang-syntax_zh.md](specs/olang-syntax_zh.md) |
+| 预处理器 | [preproc_zh.md](preproc_zh.md) |
 
 ### 源码地图
 
@@ -42,6 +43,10 @@ alinker/
 └── src/
     ├── link_core.c     # 链接核心
     └── main.c          # CLI
+
+preproc/
+└── src/
+    └── main.c          # olprep（仅 #include）
 ```
 
 ### 开发流程
@@ -49,7 +54,7 @@ alinker/
 1. **修改代码** → `olang/src/`, `kasm/src/`, etc.
 2. **构建** → `make all`
 3. **测试** → `make check`
-4. **验证示例** → `bash tests/run_programs_olc.sh`
+4. **验证示例** → `bash tests/olang/run_programs_olc.sh`
 
 ---
 

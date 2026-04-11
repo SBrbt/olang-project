@@ -19,10 +19,11 @@ make all
 ```
 
 生成：
+- `bin/olprep` — 预处理器（仅 `#include`）
 - `bin/olang` — 编译器
 - `bin/kasm` — 汇编器
 - `bin/alinker` — 链接器
-- `examples/olc` — 驱动脚本
+- `examples/olc` — 驱动脚本（先跑 `olprep` 再链其余工具；中间文件保留在 `<输出名>.olc.d/`）
 
 ### 验证
 

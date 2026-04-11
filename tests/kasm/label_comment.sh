@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Labels with inline comments must assemble correctly.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/bin/kasm"
 TMP="$ROOT/tests/fixtures/kasm_label_comment_tmp"
 mkdir -p "$TMP"

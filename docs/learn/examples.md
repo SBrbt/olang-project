@@ -6,6 +6,10 @@
 
 30+ runnable examples.
 
+### POSIX syscall shims (`libposix.kasm`)
+
+Shared `extern fn posix_*` declarations live in [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol). Example programs use `#include "posix_abi.ol"`; `examples/olc` passes `-I` so that path resolves.
+
 ### Quick Run
 
 ```bash
@@ -75,7 +79,7 @@ bash examples/olc -o examples/out/multi.elf \
 
 ### Edge Case Tests
 
-Located in `tests/`:
+Located under `tests/olang/` (also compiled and run by `tests/olang/run_programs_olc.sh` as part of `make check`):
 
 - `olang_aggregate_copy.ol` — aggregate value copy
 - `olang_nested_struct.ol` — nested struct access

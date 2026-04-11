@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Minimal end-to-end: alinker produces non-empty output from fixture .oobj + script.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 BIN="$ROOT/bin/alinker"
 FIX="$ROOT/tests/fixtures/alinker_smoke"

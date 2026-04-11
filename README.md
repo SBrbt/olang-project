@@ -38,6 +38,7 @@ Phase 1 (core features complete): type system, functions, structs, arrays, contr
 ```
 ├── docs/          # All documentation
 ├── olang/         # Compiler source
+├── preproc/       # Preprocessor (olprep)
 ├── kasm/          # Assembler
 ├── alinker/       # Linker
 ├── common/        # Shared code

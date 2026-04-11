@@ -23,7 +23,7 @@ bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
 
 ### Expected Results
 
-Exit codes and stdout expectations are defined in [`tests/run_programs_olc.sh`](../tests/run_programs_olc.sh) (`make check` runs it); the table below is for quick reference — when in doubt, the script is authoritative.
+Exit codes and stdout expectations are defined in [`tests/olang/run_programs_olc.sh`](../tests/olang/run_programs_olc.sh) (`make check` runs it); the table below is for quick reference — when in doubt, the script is authoritative.
 
 | Program (`ex_*.ol`) | Expected |
 |----------------------|----------|
@@ -38,7 +38,7 @@ Exit codes and stdout expectations are defined in [`tests/run_programs_olc.sh`](
 - Default **`return cast<i32>(0)`** means pass.
 - Phase 1 has no reassignment to existing `let`; counting scenarios may use recursion instead of mutable loops.
 
-Adding a new `ex_*.ol` causes the test script to automatically pick it up; edit `tests/run_programs_olc.sh` for custom stdout/exit assertions.
+Adding a new `ex_*.ol` causes the test script to automatically pick it up; edit `tests/olang/run_programs_olc.sh` for custom stdout/exit assertions.
 
 ### Multi-file Example
 

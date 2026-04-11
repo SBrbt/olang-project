@@ -1,3 +1,116 @@
+# OLang runtime library (olrt)
+# Provides compiler support functions analogous to compiler-rt / libgcc.
+
 .global __olrt_stub
 __olrt_stub:
+inst ret
+
+# __olrt_f16_to_f32: Convert IEEE 754 half-precision to single-precision.
+# OLang ABI: input f16 bits in r12 (low 16 bits), output f32 bits in rax.
+#
+# Algorithm:
+#   sign = (h >> 15) & 1
+#   exp  = (h >> 10) & 0x1f
+#   mant = h & 0x3ff
+#   if exp == 0:       result = sign<<31 (zero / subnormals flush to zero)
+#   elif exp == 0x1f:  result = sign<<31 | 0x7f800000 | (mant ? mant<<13 : 0) (inf/nan)
+#   else:              result = sign<<31 | (exp+112)<<23 | mant<<13
+.global __olrt_f16_to_f32
+__olrt_f16_to_f32:
+# mov rax, r12 ; movzx eax, ax (get low 16 bits)
+.bytes 4c 89 e0
+.bytes 0f b7 c0
+# mov ecx, eax ; shr ecx, 10 ; and ecx, 0x1f  (exp = (h>>10)&0x1f)
+.bytes 89 c1
+.bytes c1 e9 0a
+.bytes 83 e1 1f
+# mov edx, eax ; and edx, 0x3ff  (mant = h & 0x3ff)
+.bytes 89 c2
+.bytes 81 e2 ff 03 00 00
+# mov esi, eax ; shr esi, 15 ; shl esi, 31  (sign<<31)
+.bytes 89 c6
+.bytes c1 ee 0f
+.bytes c1 e6 1f
+# test ecx, ecx ; je .f16_zero
+.bytes 85 c9
+.bytes 74 15
+# cmp ecx, 0x1f ; je .f16_inf_nan
+.bytes 83 f9 1f
+.bytes 74 13
+# Normal: add ecx, 112 ; shl ecx, 23 ; shl edx, 13 ; or eax, esi ; or eax, ecx ; or eax, edx ; ret
+.bytes 83 c1 70
+.bytes c1 e1 17
+.bytes c1 e2 0d
+.bytes 89 f0
+.bytes 09 c8
+.bytes 09 d0
+inst ret
+# .f16_zero: mov eax, esi ; ret
+.bytes 89 f0
+inst ret
+# .f16_inf_nan: shl edx, 13 ; mov eax, esi ; or eax, 0x7f800000 ; or eax, edx ; ret
+.bytes c1 e2 0d
+.bytes 89 f0
+.bytes 0d 00 00 80 7f
+.bytes 09 d0
+inst ret
+
+# __olrt_f32_to_f16: Convert IEEE 754 single-precision to half-precision.
+# OLang ABI: input f32 bits in r12 (low 32 bits), output f16 bits in rax.
+#
+# Algorithm:
+#   sign = (f >> 16) & 0x8000
+#   exp  = (f >> 23) & 0xff
+#   mant = f & 0x7fffff
+#   if exp == 0xff:    h = sign | 0x7c00 | (mant ? 0x200 : 0) (inf/nan)
+#   elif exp > 142:    h = sign | 0x7c00 (overflow to inf)
+#   elif exp < 113:    h = sign (underflow to zero)
+#   else:              h = sign | (exp-112)<<10 | mant>>13
+.global __olrt_f32_to_f16
+__olrt_f32_to_f16:
+# mov eax, r12d (get low 32 bits)
+.bytes 44 89 e0
+# mov ecx, eax ; shr ecx, 23 ; and ecx, 0xff  (exp)
+.bytes 89 c1
+.bytes c1 e9 17
+.bytes 81 e1 ff 00 00 00
+# mov edx, eax ; and edx, 0x7fffff  (mant)
+.bytes 89 c2
+.bytes 81 e2 ff ff 7f 00
+# mov esi, eax ; shr esi, 16 ; and esi, 0x8000  (sign)
+.bytes 89 c6
+.bytes c1 ee 10
+.bytes 81 e6 00 80 00 00
+# cmp ecx, 0xff ; je .f32_inf_nan
+.bytes 81 f9 ff 00 00 00
+.bytes 74 20
+# cmp ecx, 142 ; ja .f32_overflow
+.bytes 81 f9 8e 00 00 00
+.bytes 77 29
+# cmp ecx, 113 ; jb .f32_underflow
+.bytes 81 f9 71 00 00 00
+.bytes 72 29
+# Normal: sub ecx, 112 ; shl ecx, 10 ; shr edx, 13 ; mov eax, esi ; or eax, ecx ; or eax, edx ; ret
+.bytes 83 e9 70
+.bytes c1 e1 0a
+.bytes c1 ea 0d
+.bytes 89 f0
+.bytes 09 c8
+.bytes 09 d0
+inst ret
+# .f32_inf_nan: test edx, edx ; mov eax, esi ; or eax, 0x7c00
+.bytes 85 d2
+.bytes 89 f0
+.bytes 0d 00 7c 00 00
+# je .f32_inf_ret ; or eax, 0x200
+.bytes 74 05
+.bytes 0d 00 02 00 00
+# .f32_inf_ret:
+inst ret
+# .f32_overflow: mov eax, esi ; or eax, 0x7c00 ; ret
+.bytes 89 f0
+.bytes 0d 00 7c 00 00
+inst ret
+# .f32_underflow: mov eax, esi ; ret
+.bytes 89 f0
 inst ret
