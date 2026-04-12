@@ -1053,42 +1053,6 @@ static OlStmt *parse_stmt(ParseCtx *C) {
     }
     return s;
   }
-  if (C->L->tok == TOK_KW_PTRBIND) {
-    OlStmt *s = new_stmt(OL_ST_PTRBIND, line);
-    if (!s) return NULL;
-    if (!lex_next(C)) return NULL;
-    if (C->L->tok != TOK_IDENT) {
-      errf(C, "ptrbind name");
-      free(s);
-      return NULL;
-    }
-    snprintf(s->u.ptrbind.bind, sizeof(s->u.ptrbind.bind), "%s", C->L->ident);
-    if (!lex_next(C)) return NULL;
-    if (!expect(C, TOK_KW_AS)) {
-      free(s);
-      return NULL;
-    }
-    if (!parse_type_ref(C, &s->u.ptrbind.ty)) {
-      free(s);
-      return NULL;
-    }
-    if (!expect(C, TOK_KW_FROM)) {
-      free(s);
-      return NULL;
-    }
-    if (C->L->tok != TOK_IDENT) {
-      errf(C, "ptrbind symbol");
-      free(s);
-      return NULL;
-    }
-    snprintf(s->u.ptrbind.symbol, sizeof(s->u.ptrbind.symbol), "%s", C->L->ident);
-    if (!lex_next(C)) return NULL;
-    if (!expect(C, TOK_SEMI)) {
-      free(s);
-      return NULL;
-    }
-    return s;
-  }
   if (C->L->tok == TOK_KW_DEREF) {
     OlStmt *s = new_stmt(OL_ST_DEREF, line);
     if (!s) return NULL;

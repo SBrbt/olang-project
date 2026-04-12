@@ -48,7 +48,6 @@ static int kw_tok(const char *s) {
   if (strcmp(s, "load") == 0) return TOK_KW_LOAD;
   if (strcmp(s, "store") == 0) return TOK_KW_STORE;
   if (strcmp(s, "addr") == 0) return TOK_KW_ADDR;
-  if (strcmp(s, "ptrbind") == 0) return TOK_KW_PTRBIND;
   if (strcmp(s, "deref") == 0) return TOK_KW_DEREF;
   if (strcmp(s, "as") == 0) return TOK_KW_AS;
   if (strcmp(s, "from") == 0) return TOK_KW_FROM;

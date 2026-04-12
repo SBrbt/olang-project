@@ -45,6 +45,13 @@ typedef struct OlExternDecl {
   size_t param_count;
 } OlExternDecl;
 
+typedef enum OlAddrKind {
+  OL_ADDR_NONE = 0,
+  OL_ADDR_LOCAL,
+  OL_ADDR_GLOBAL,
+  OL_ADDR_SYMBOL
+} OlAddrKind;
+
 typedef enum OlExprKind {
   OL_EX_INT = 1,
   OL_EX_FLOAT,
@@ -134,6 +141,7 @@ struct OlExpr {
     } reinterpret_;
     struct {
       char name[128];
+      OlAddrKind addr_kind; /* filled by sema */
     } addr;
     struct {
       OlTypeRef elem_ty;
@@ -147,7 +155,7 @@ struct OlExpr {
     struct {
       char base_ty[128];
       char field[128];
-      OlExpr *obj; /* optional: NULL means synthetic from ptrbind context */
+      OlExpr *obj; /* optional: NULL means synthetic context */
     } field;
     struct {
       char arr_ty[128];
@@ -167,7 +175,6 @@ typedef enum OlStmtKind {
   OL_ST_EXPR,
   OL_ST_BREAK,
   OL_ST_CONTINUE,
-  OL_ST_PTRBIND,
   OL_ST_DEREF
 } OlStmtKind;
 
@@ -202,11 +209,6 @@ struct OlStmt {
       OlExpr *val; /* NULL for void return */
     } ret;
     OlExpr *expr;
-    struct {
-      char bind[128];
-      OlTypeRef ty;
-      char symbol[128];
-    } ptrbind;
     struct {
       char bind[128];
       OlTypeRef ty;

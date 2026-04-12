@@ -82,8 +82,8 @@ x.b = 9i64;    // does not affect y
 #### Type Casting
 
 ```olang
-cast<i32>(value)   // explicit cast
-cast<ptr>(0x1000u64)  // int to pointer
+cast<i32>(value)              // explicit cast (allowed conversions only)
+reinterpret<ptr>(0x1000u64)   // same-sized rebind: u64 ↔ ptr, i32 ↔ u32, …
 ```
 
 ---

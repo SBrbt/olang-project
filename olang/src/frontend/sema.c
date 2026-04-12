@@ -17,7 +17,8 @@ static uint32_t hash_path_djb2(const char *s) {
 typedef struct SymSlot {
   char name[128];
   OlTypeRef ty;
-  char ptrbind_sym[128];
+  unsigned char is_file_global; /* 1: file-level let (addr uses global object, not stack) */
+  unsigned char indirect;       /* 1: slot holds ptr; ty is element type (deref name as ty) */
 } SymSlot;
 
 #define MAX_SYM 512
@@ -256,15 +257,13 @@ static int exists_in_current_scope(SemaCtx *S, const char *name) {
   return 0;
 }
 
-static int bind_sym(SemaCtx *S, const char *name, const OlTypeRef *ty, const char *ptrbind) {
+static int bind_sym(SemaCtx *S, const char *name, const OlTypeRef *ty, int file_global) {
   if (S->sym_count >= MAX_SYM) return 0;
   if (exists_in_current_scope(S, name)) return 0;
   snprintf(S->syms[S->sym_count].name, sizeof(S->syms[S->sym_count].name), "%s", name);
   S->syms[S->sym_count].ty = *ty;
-  S->syms[S->sym_count].ptrbind_sym[0] = '\0';
-  if (ptrbind && ptrbind[0]) {
-    snprintf(S->syms[S->sym_count].ptrbind_sym, sizeof(S->syms[S->sym_count].ptrbind_sym), "%s", ptrbind);
-  }
+  S->syms[S->sym_count].is_file_global = file_global ? 1u : 0u;
+  S->syms[S->sym_count].indirect = 0u;
   S->sym_count++;
   return 1;
 }
@@ -536,13 +535,18 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
     }
     case OL_EX_ADDR: {
       SymSlot *sl = lookup_sym(S, e->u.addr.name);
-      if (!sl) {
-        sema_err(S, e->line, "addr of unknown");
-        return 0;
+      if (sl) {
+        e->u.addr.addr_kind = sl->is_file_global ? OL_ADDR_GLOBAL : OL_ADDR_LOCAL;
+        e->ty.kind = OL_TY_PTR;
+        return 1;
       }
-      (void)sl;
-      e->ty.kind = OL_TY_PTR;
-      return 1;
+      if (ol_program_find_extern(S->prog, e->u.addr.name) >= 0 || find_func(S->prog, e->u.addr.name)) {
+        e->u.addr.addr_kind = OL_ADDR_SYMBOL;
+        e->ty.kind = OL_TY_PTR;
+        return 1;
+      }
+      sema_err(S, e->line, "addr of unknown (need local, global, extern, or fn)");
+      return 0;
     }
     case OL_EX_LOAD: {
       if (!resolve_expr(S, e->u.load.ptr)) return 0;
@@ -657,7 +661,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
         /* Aggregate types (struct/array) don't require initializer regardless of size */
         if (is_aggregate) {
           /* Aggregate: no init required, bind the type */
-          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, NULL)) {
+          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, 0)) {
             sema_err(S, s->line, "duplicate let or oom");
             return 0;
           }
@@ -672,7 +676,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
             sema_err(S, s->line, "let type mismatch");
             return 0;
           }
-          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, NULL)) {
+          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, 0)) {
             sema_err(S, s->line, "duplicate let or oom");
             return 0;
           }
@@ -809,36 +813,14 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
       case OL_ST_EXPR:
         if (!resolve_expr(S, s->u.expr)) return 0;
         break;
-      case OL_ST_PTRBIND: {
-        OlTypeRef ptrty;
-        if (!type_is_valid(S->prog, &s->u.ptrbind.ty) || s->u.ptrbind.ty.kind == OL_TY_VOID) {
-          sema_err(S, s->line, "ptrbind typed view must be concrete type");
-          return 0;
-        }
-        if (ol_program_find_extern(S->prog, s->u.ptrbind.symbol) < 0 && !find_func(S->prog, s->u.ptrbind.symbol)) {
-          sema_err(S, s->line, "ptrbind unknown symbol");
-          return 0;
-        }
-        memset(&ptrty, 0, sizeof(ptrty));
-        ptrty.kind = OL_TY_PTR;
-        if (!bind_sym(S, s->u.ptrbind.bind, &ptrty, s->u.ptrbind.symbol)) {
-          sema_err(S, s->line, "duplicate ptrbind or oom");
-          return 0;
-        }
-        break;
-      }
       case OL_ST_DEREF: {
         SymSlot *sl = lookup_sym(S, s->u.deref.bind);
         if (!sl) {
           sema_err(S, s->line, "deref unknown bind");
           return 0;
         }
-        if (sl->ty.kind != OL_TY_PTR) {
-          sema_err(S, s->line, "deref source must be ptr");
-          return 0;
-        }
-        if (!sl->ptrbind_sym[0]) {
-          sema_err(S, s->line, "deref requires ptrbind-backed symbol");
+        if (sl->ty.kind != OL_TY_PTR || sl->indirect) {
+          sema_err(S, s->line, "deref requires ptr local (not already indirect)");
           return 0;
         }
         if (!type_is_valid(S->prog, &s->u.deref.ty) || s->u.deref.ty.kind == OL_TY_VOID) {
@@ -848,12 +830,13 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
         {
           uint32_t dz = ty_size_bytes(S->prog, &s->u.deref.ty);
           if (dz == 0u || dz > 8u) {
-            sema_err(S, s->line, "deref type must be 4 or 8 bytes");
+            sema_err(S, s->line, "deref element size must be 1, 2, 4, or 8 bytes");
             return 0;
           }
         }
-        /* After deref codegen, slot holds loaded value of type T. */
+        /* Slot keeps ptr at runtime; ty becomes element type; loads/stores at use sites. */
         sl->ty = s->u.deref.ty;
+        sl->indirect = 1u;
         break;
       }
       default:
@@ -972,7 +955,7 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
     size_t j;
     enter_scope(&S);
     for (j = 0; j < (size_t)i; ++j) {
-      if (!bind_sym(&S, p->globals[j].name, &p->globals[j].ty, NULL)) {
+      if (!bind_sym(&S, p->globals[j].name, &p->globals[j].ty, 1)) {
         snprintf(err, err_len, "global bind oom");
         exit_scope(&S);
         return 0;
@@ -1000,7 +983,7 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
     }
     enter_scope(&S);
     for (k = 0; k < p->global_count; ++k) {
-      if (!bind_sym(&S, p->globals[k].name, &p->globals[k].ty, NULL)) {
+      if (!bind_sym(&S, p->globals[k].name, &p->globals[k].ty, 1)) {
         snprintf(err, err_len, "duplicate global name vs function scope");
         exit_scope(&S);
         return 0;
@@ -1014,7 +997,7 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
         exit_scope(&S);
         return 0;
       }
-      if (!bind_sym(&S, p->funcs[i].params[k].name, &p->funcs[i].params[k].ty, NULL)) {
+      if (!bind_sym(&S, p->funcs[i].params[k].name, &p->funcs[i].params[k].ty, 0)) {
         snprintf(err, err_len, "duplicate param or oom");
         exit_scope(&S);
         exit_scope(&S);

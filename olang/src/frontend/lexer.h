@@ -59,7 +59,6 @@ typedef enum OlTok {
   TOK_KW_LOAD,
   TOK_KW_STORE,
   TOK_KW_ADDR,
-  TOK_KW_PTRBIND,
   TOK_KW_DEREF,
   TOK_KW_AS,
   TOK_KW_FROM,

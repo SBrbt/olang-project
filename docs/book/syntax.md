@@ -12,10 +12,13 @@
 ```
 
 #### Identifiers
-`[A-Za-z_][A-Za-z0-9_]*`
+`[A-Za-z_][A-Za-z0-9_]*` (implementation limit: 63 characters)
 
 #### Keywords
-`extern fn let if else while break continue return type struct array cast load store addr ptrbind deref bool u8 i32 u32 i64 u64 ptr void true false`
+
+- **Syntax / control:** `extern`, `fn`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
+- **Operations:** `cast`, `reinterpret`, `load`, `store`, `addr`, `deref`, `as`
+- **Types / literals:** `void`, `bool`, `ptr`, `true`, `false`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `f32`, `f64`, `b8`, `b16`, `b32`, `b64`
 
 #### Literals
 
@@ -25,7 +28,8 @@
 | | hexadecimal | `0xFF` |
 | | binary | `0b1010` |
 | | octal | `0o77` |
-| | suffix | `42i32`, `42u64` |
+| | suffix | `42i32`, `42u64`, `255u8`, `1b64` |
+| Floating-point | decimal fraction or exponent | `3.14`, `1e-3`, optional `f32` / `f64` / `f16` suffix |
 | Boolean | `true`, `false` |
 | Character | `'a'`, `'\n'` (u8) |
 | String | `"hello\n"` (ptr) |
@@ -35,7 +39,8 @@
 ### Types
 
 ```
-Type ::= void | bool | u8 | i32 | u32 | i64 | u64 | ptr | Ident
+Type ::= void | bool | ptr | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64
+       | f16 | f32 | f64 | b8 | b16 | b32 | b64 | Ident
 ```
 
 #### Struct
@@ -58,8 +63,8 @@ type Int5 = array<i32, 5>;
 
 #### Precedence (high → low)
 
-1. `addr`, `cast<T>`, `load<T>`, `[]`, `.`, `()` — call
-2. `!`, `-` — unary
+1. `addr`, `cast<T>`, `reinterpret<T>`, `load<T>`, `[]`, `.`, `()` — call
+2. `!`, `~`, `-` — unary (`~` only for `b*`; `!` only for `bool`)
 3. `*`, `/`, `%`
 4. `+`, `-`
 5. `<<`, `>>`
@@ -74,11 +79,14 @@ type Int5 = array<i32, 5>;
 #### Type Operations
 
 ```olang
-cast<T>(expr)        // type cast
-load<T>(ptr)         // read from pointer
-store<T>(ptr, val)   // write to pointer
-addr expr            // address-of
+cast<T>(expr)           // explicit conversion (see [types](types.md))
+reinterpret<T>(expr)    // same bit width, different type (no bool; no aggregates)
+load<T>(ptr)            // read from pointer
+store<T>(ptr, val)      // write to pointer
+addr Ident   // address: resolves local name, then global `let`, then extern / `fn` symbol
 ```
+
+Any local of type `ptr` may be used with `deref` (the slot continues to hold the pointer value at runtime).
 
 ---
 
@@ -87,7 +95,7 @@ addr expr            // address-of
 #### Variable Binding
 ```olang
 let Ident: Type = Expr;  // scalars (primitives) must be initialized
-let Ident: Type;       // aggregates (arrays/structs) can defer initialization
+let Ident: Type;         // aggregates (arrays/structs) can defer initialization
 ```
 
 #### Assignment
@@ -95,6 +103,13 @@ let Ident: Type;       // aggregates (arrays/structs) can defer initialization
 Expr = Expr;           // simple assignment
 Expr.Ident = Expr;     // field
 Expr[Expr] = Expr;     // array element
+```
+
+#### `deref` (ABI helper)
+```olang
+deref name as T;   // compile-time only: mark `name` as an indirect binding (stack slot still holds `ptr`;
+                   // logical type for checking is `T`). `T` must be 1, 2, 4, or 8 bytes.
+                   // Reading `name` emits a load; `name = rhs` emits a store through that pointer.
 ```
 
 #### Control Flow
@@ -132,6 +147,7 @@ Param  ::= Ident: Type
 
 #### Global Variables
 ```olang
+[@data | @bss | @rodata | @section("name")]  // optional section attributes
 let Ident: Type = Expr;
 ```
 
@@ -143,7 +159,6 @@ let Ident: Type = Expr;
 - No compound assignment (`+=`, `-=`)
 - No increment/decrement (`++`, `--`)
 - No array bounds checking
-- No floating point
 
 ---
 

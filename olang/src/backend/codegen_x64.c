@@ -37,7 +37,8 @@ typedef struct CG {
   struct {
     char name[128];
     int slot;
-    OlTypeRef ty;  /* Type info needed for array element size, etc. */
+    OlTypeRef ty;  /* Element / value type; when indirect, slot holds ptr to this type */
+    unsigned char indirect;
   } loc[256];
   int nloc;
 
@@ -438,6 +439,15 @@ static int lookup_slot(CG *g, const char *name) {
   return -1;
 }
 
+/* Index into g->loc[] for innermost binding of name, or -1. */
+static int find_local_loc(CG *g, const char *name) {
+  int i;
+  for (i = g->nloc - 1; i >= 0; --i) {
+    if (strcmp(g->loc[i].name, name) == 0) return i;
+  }
+  return -1;
+}
+
 static OlTypeRef *lookup_local_ty(CG *g, const char *name) {
   int i;
   for (i = g->nloc - 1; i >= 0; --i) {
@@ -472,6 +482,7 @@ static int bind_local(CG *g, const char *name, int slot, const OlTypeRef *ty) {
   } else {
     memset(&g->loc[g->nloc].ty, 0, sizeof(OlTypeRef));
   }
+  g->loc[g->nloc].indirect = 0u;
   g->nloc++;
   return 1;
 }
@@ -598,8 +609,51 @@ static int gen_expr(CG *g, OlExpr *e) {
       int gi;
       uint32_t gsz;
       int out;
-      /* Local variable: always returns the slot (contains value or pointer) */
-      if (sl >= 0) return sl;
+      int li;
+      /* Indirect local: slot holds ptr; rvalue loads element into a new temp slot */
+      if (sl >= 0) {
+        li = find_local_loc(g, e->u.var_name);
+        if (li >= 0 && g->loc[li].indirect) {
+          OlTypeRef *elt = &g->loc[li].ty;
+          uint32_t esz = type_size_bytes(g->p, elt);
+          emit_mov_gpr_from_slot(g, 0, sl);
+          out = alloc_slot(g);
+          if (type_is_float(elt)) {
+            int32_t dout = slot_disp(out);
+            if (elt->kind == OL_TY_F64) {
+              tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x00}, 4); /* movsd xmm0,[rax] */
+              if (dout >= -128 && dout <= 127)
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&dout, 4);
+              }
+            } else if (elt->kind == OL_TY_F32) {
+              tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x00}, 4);
+              if (dout >= -128 && dout <= 127)
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&dout, 4);
+              }
+            } else {
+              if (!emit_load_at_rax(g, 2u)) {
+                cg_err(g, "indirect f16 load");
+                return -1;
+              }
+              emit_mov_rbp_r64(g, out, 0);
+            }
+            return out;
+          }
+          if (!emit_load_at_rax(g, esz)) {
+            cg_err(g, "indirect load");
+            return -1;
+          }
+          emit_mov_rbp_r64(g, out, 0);
+          return out;
+        }
+        return sl;
+      }
       /* Global variable: check if it's an aggregate type */
       gi = ol_program_find_global(g->p, e->u.var_name);
       if (gi < 0) return -1;
@@ -989,11 +1043,22 @@ static int gen_expr(CG *g, OlExpr *e) {
       return out;
     }
     case OL_EX_ADDR: {
-      int s = lookup_slot(g, e->u.addr.name);
+      int s;
       int gi;
       int32_t d;
       int out;
-      if (s >= 0) {
+      if (e->u.addr.addr_kind == OL_ADDR_LOCAL) {
+        int li_addr;
+        s = lookup_slot(g, e->u.addr.name);
+        if (s < 0) return -1;
+        li_addr = find_local_loc(g, e->u.addr.name);
+        /* Logical binding through ptr: address is the pointer value in the slot, not &slot */
+        if (li_addr >= 0 && g->loc[li_addr].indirect) {
+          out = alloc_slot(g);
+          emit_mov_r64_rbp(g, 0, s);
+          emit_mov_rbp_r64(g, out, 0);
+          return out;
+        }
         d = slot_disp(s);
         if (d >= -128 && d <= 127) {
           tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x45, (uint8_t)(uint8_t)d}, 4);
@@ -1005,13 +1070,23 @@ static int gen_expr(CG *g, OlExpr *e) {
         emit_mov_rbp_r64(g, out, 0);
         return out;
       }
-      gi = ol_program_find_global(g->p, e->u.addr.name);
-      if (gi < 0) return -1;
-      emit_lea_rax_rip(g, g->p->globals[(size_t)gi].name);
-      if (g->failed) return -1;
-      out = alloc_slot(g);
-      emit_mov_rbp_r64(g, out, 0);
-      return out;
+      if (e->u.addr.addr_kind == OL_ADDR_GLOBAL) {
+        gi = ol_program_find_global(g->p, e->u.addr.name);
+        if (gi < 0) return -1;
+        emit_lea_rax_rip(g, g->p->globals[(size_t)gi].name);
+        if (g->failed) return -1;
+        out = alloc_slot(g);
+        emit_mov_rbp_r64(g, out, 0);
+        return out;
+      }
+      if (e->u.addr.addr_kind == OL_ADDR_SYMBOL) {
+        emit_lea_rax_rip(g, sym_for_fn_ref(g, e->u.addr.name));
+        if (g->failed) return -1;
+        out = alloc_slot(g);
+        emit_mov_rbp_r64(g, out, 0);
+        return out;
+      }
+      return -1;
     }
     case OL_EX_LOAD: {
       int ps = gen_expr(g, e->u.load.ptr);
@@ -1294,6 +1369,53 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
               break;
             }
           }
+          /* Indirect local: store rhs through pointer in slot */
+          {
+            int lidx = find_local_loc(g, lhs->u.var_name);
+            if (lidx >= 0 && g->loc[lidx].indirect) {
+              OlTypeRef *elt = &g->loc[lidx].ty;
+              uint32_t esz = type_size_bytes(g->p, elt);
+              emit_mov_gpr_from_slot(g, 0, ls);
+              if (type_is_float(elt)) {
+                int32_t drs = slot_disp(rs);
+                if (elt->kind == OL_TY_F64) {
+                  if (drs >= -128 && drs <= 127)
+                    tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
+                  else {
+                    tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
+                    tx_copy(g, (uint8_t *)&drs, 4);
+                  }
+                  tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x00}, 4);
+                } else if (elt->kind == OL_TY_F32) {
+                  if (drs >= -128 && drs <= 127)
+                    tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
+                  else {
+                    tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
+                    tx_copy(g, (uint8_t *)&drs, 4);
+                  }
+                  tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x00}, 4);
+                } else {
+                  emit_mov_gpr_from_slot(g, 3, rs);
+                  tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
+                }
+                break;
+              }
+              emit_mov_gpr_from_slot(g, 3, rs);
+              if (esz == 8u)
+                tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3);
+              else if (esz == 4u)
+                tx_copy(g, (uint8_t[]){0x89, 0x18}, 2);
+              else if (esz == 2u)
+                tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
+              else if (esz == 1u)
+                tx_copy(g, (uint8_t[]){0x88, 0x18}, 2);
+              else {
+                cg_err(g, "indirect store size");
+                return 0;
+              }
+              break;
+            }
+          }
           /* Non-aggregate: simple pointer/value copy */
           emit_mov_r64_rbp(g, 0, rs);
           emit_mov_rbp_r64(g, ls, 0);
@@ -1534,30 +1656,16 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
       case OL_ST_EXPR:
         if (gen_expr(g, s->u.expr) < 0) return 0;
         break;
-      case OL_ST_PTRBIND: {
-        int slot = alloc_slot(g);
-        OlTypeRef ptr_ty;
-        memset(&ptr_ty, 0, sizeof(ptr_ty));
-        ptr_ty.kind = OL_TY_PTR;
-        emit_lea_rax_rip(g, sym_for_fn_ref(g, s->u.ptrbind.symbol));
-        emit_mov_rbp_r64(g, slot, 0);
-        if (!bind_local(g, s->u.ptrbind.bind, slot, &ptr_ty)) return 0;
-        break;
-      }
       case OL_ST_DEREF: {
-        int bs = lookup_slot(g, s->u.deref.bind);
+        int li = find_local_loc(g, s->u.deref.bind);
         uint32_t dsz = type_size_bytes(g->p, &s->u.deref.ty);
-        if (bs < 0) return 0;
+        if (li < 0) return 0;
         if (dsz != 1u && dsz != 2u && dsz != 4u && dsz != 8u) {
-          cg_err(g, "deref load size");
+          cg_err(g, "deref element size");
           return 0;
         }
-        emit_mov_gpr_from_slot(g, 0, bs);
-        if (!emit_load_at_rax(g, dsz)) {
-          cg_err(g, "deref load");
-          return 0;
-        }
-        emit_mov_rbp_r64(g, bs, 0);
+        g->loc[li].indirect = 1u;
+        g->loc[li].ty = s->u.deref.ty;
         break;
       }
       default:

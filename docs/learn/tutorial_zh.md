@@ -82,8 +82,8 @@ x.b = 9i64;    // 不影响 y
 #### 类型转换
 
 ```olang
-cast<i32>(value)   // 显式转换
-cast<ptr>(0x1000u64)  // 整数转指针
+cast<i32>(value)              // 显式转换（仅允许的组合）
+reinterpret<ptr>(0x1000u64)   // 同宽重解释：u64 ↔ ptr、i32 ↔ u32 等
 ```
 
 ---
