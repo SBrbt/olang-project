@@ -1,8 +1,8 @@
 // Test u64 arithmetic, comparisons, and large values.
-extern fn main() -> i32 {
-  let a: u64 = 1000000u64;
-  let b: u64 = 999999u64;
-  let big: u64 = 18446744073709551615u64;
+extern i32 main() {
+  let a<u64> @stack<64>(1000000u64);
+  let b<u64> @stack<64>(999999u64);
+  let big<u64> @stack<64>(18446744073709551615u64);
 
   if (a > b) {
     if (a - b == 1u64) {

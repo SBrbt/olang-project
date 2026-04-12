@@ -1,3 +1,8 @@
+/*
+ * Semantic analysis: scopes, types, bindings, and layout metadata on the AST.
+ * Consumes parser output; does not emit instructions. Code generation:
+ * backend/codegen_x64.c. Boundaries: docs/internals/compiler-modules.md
+ */
 #include "sema.h"
 
 #include "ast.h"
@@ -19,6 +24,7 @@ typedef struct SymSlot {
   OlTypeRef ty;
   unsigned char is_file_global; /* 1: file-level let (addr uses global object, not stack) */
   unsigned char indirect;       /* 1: slot holds ptr; ty is element type (deref name as ty) */
+  uint32_t view_byte_off;      /* offset within shared stack/global blob (direct locals) */
 } SymSlot;
 
 #define MAX_SYM 512
@@ -257,13 +263,14 @@ static int exists_in_current_scope(SemaCtx *S, const char *name) {
   return 0;
 }
 
-static int bind_sym(SemaCtx *S, const char *name, const OlTypeRef *ty, int file_global) {
+static int bind_sym(SemaCtx *S, const char *name, const OlTypeRef *ty, int file_global, uint32_t view_byte_off) {
   if (S->sym_count >= MAX_SYM) return 0;
   if (exists_in_current_scope(S, name)) return 0;
   snprintf(S->syms[S->sym_count].name, sizeof(S->syms[S->sym_count].name), "%s", name);
   S->syms[S->sym_count].ty = *ty;
   S->syms[S->sym_count].is_file_global = file_global ? 1u : 0u;
   S->syms[S->sym_count].indirect = 0u;
+  S->syms[S->sym_count].view_byte_off = view_byte_off;
   S->sym_count++;
   return 1;
 }
@@ -306,8 +313,113 @@ static int init_expr_is_const(const OlExpr *e) {
 
 static const OlTypeRef *lookup_global_type(const OlProgram *p, const char *name) {
   int gi = ol_program_find_global(p, name);
+  size_t bi;
   if (gi < 0) return NULL;
-  return &p->globals[(size_t)gi].ty;
+  for (bi = 0; bi < p->globals[(size_t)gi].binding_count; ++bi) {
+    if (strcmp(p->globals[(size_t)gi].bindings[bi].name, name) == 0)
+      return &p->globals[(size_t)gi].bindings[bi].ty;
+  }
+  return NULL;
+}
+
+static int typedef_is_aggregate(const OlProgram *p, const OlTypeRef *t, int *out_agg) {
+  int tdi;
+  *out_agg = 0;
+  if (t->kind != OL_TY_ALIAS) return 1;
+  tdi = ol_program_find_typedef(p, t->alias_name);
+  if (tdi < 0) return 0;
+  if (p->typedefs[(size_t)tdi].kind == OL_TYPEDEF_STRUCT || p->typedefs[(size_t)tdi].kind == OL_TYPEDEF_ARRAY)
+    *out_agg = 1;
+  return 1;
+}
+
+static int bind_global_def(SemaCtx *S, OlProgram *p, OlGlobalDef *gd) {
+  size_t bi;
+  uint32_t off = 0;
+  for (bi = 0; bi < gd->binding_count; ++bi) {
+    if (!bind_sym(S, gd->bindings[bi].name, &gd->bindings[bi].ty, 1, off)) return 0;
+    off += ty_size_bytes(p, &gd->bindings[bi].ty);
+  }
+  return 1;
+}
+
+static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t err_len) {
+  size_t bi, bj;
+  uint32_t sum_bits = 0;
+  int is_aggregate = 0;
+  if (gd->binding_count < 1 || gd->binding_count > OL_MAX_LET_BINDINGS) {
+    snprintf(err, err_len, "invalid global binding count");
+    return 0;
+  }
+  for (bi = 0; bi < gd->binding_count; ++bi) {
+    for (bj = bi + 1; bj < gd->binding_count; ++bj) {
+      if (strcmp(gd->bindings[bi].name, gd->bindings[bj].name) == 0) {
+        snprintf(err, err_len, "duplicate name in global let");
+        return 0;
+      }
+    }
+  }
+  for (bi = 0; bi < gd->binding_count; ++bi) {
+    if (!type_is_valid(p, &gd->bindings[bi].ty) || gd->bindings[bi].ty.kind == OL_TY_VOID) {
+      snprintf(err, err_len, "invalid global type");
+      return 0;
+    }
+  }
+  if (gd->binding_count == 1) {
+    if (!typedef_is_aggregate(p, &gd->bindings[0].ty, &is_aggregate)) {
+      snprintf(err, err_len, "invalid global type");
+      return 0;
+    }
+  } else {
+    for (bi = 0; bi < gd->binding_count; ++bi) {
+      int agg = 0;
+      if (!typedef_is_aggregate(p, &gd->bindings[bi].ty, &agg)) {
+        snprintf(err, err_len, "invalid global type");
+        return 0;
+      }
+      if (agg) {
+        snprintf(err, err_len, "multi-view global only supports scalar types");
+        return 0;
+      }
+    }
+  }
+  for (bi = 0; bi < gd->binding_count; ++bi) {
+    uint32_t b = ty_size_bytes(p, &gd->bindings[bi].ty) * 8u;
+    if (b == 0) {
+      snprintf(err, err_len, "global type has zero size");
+      return 0;
+    }
+    sum_bits += b;
+  }
+  if (sum_bits != gd->bitwidth) {
+    snprintf(err, err_len, "global view sizes must sum to bitwidth");
+    return 0;
+  }
+  if (is_aggregate) {
+    if (ty_size_bytes(p, &gd->bindings[0].ty) * 8u != gd->bitwidth) {
+      snprintf(err, err_len, "global bitwidth does not match aggregate size");
+      return 0;
+    }
+  }
+  if (gd->section == OL_GSEC_BSS && gd->init) {
+    snprintf(err, err_len, "@bss global cannot have initializer");
+    return 0;
+  }
+  if ((gd->section == OL_GSEC_DATA || gd->section == OL_GSEC_CUSTOM) && !gd->init) {
+    snprintf(err, err_len, "global in writable section needs initializer");
+    return 0;
+  }
+  if (global_storage_is_rodata(gd)) {
+    if (!gd->init) {
+      snprintf(err, err_len, "@rodata global requires initializer");
+      return 0;
+    }
+    if (!init_expr_is_const(gd->init)) {
+      snprintf(err, err_len, "@rodata initializer must be constant");
+      return 0;
+    }
+  }
+  return 1;
 }
 
 static int resolve_expr(SemaCtx *S, OlExpr *e);
@@ -639,46 +751,109 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
         exit_scope(S);
         break;
       case OL_ST_LET: {
+        size_t bi;
+        uint32_t sum_bits = 0;
+        uint32_t bw = s->u.let_.bitwidth;
         int is_aggregate = 0;
-        if (lookup_global_type(S->prog, s->u.let_.name)) {
-          sema_err(S, s->line, "let name shadows global");
+        if (s->u.let_.alloc != OL_ALLOC_STACK) {
+          sema_err(S, s->line, "local let must be @stack<bits>(...)");
           return 0;
         }
-        if (!type_is_valid(S->prog, &s->u.let_.ty) || s->u.let_.ty.kind == OL_TY_VOID) {
-          sema_err(S, s->line, "invalid let type");
+        if (s->u.let_.binding_count == 0 || s->u.let_.binding_count > OL_MAX_LET_BINDINGS) {
+          sema_err(S, s->line, "invalid let binding count");
           return 0;
         }
-        /* Check if type is aggregate (struct or array) by looking up typedef */
-        if (s->u.let_.ty.kind == OL_TY_ALIAS) {
-          int tdi = ol_program_find_typedef(S->prog, s->u.let_.ty.alias_name);
-          if (tdi >= 0) {
-            OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
-            if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-              is_aggregate = 1;
+        for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+          if (lookup_global_type(S->prog, s->u.let_.bindings[bi].name)) {
+            sema_err(S, s->line, "let name shadows global");
+            return 0;
+          }
+          if (!type_is_valid(S->prog, &s->u.let_.bindings[bi].ty) || s->u.let_.bindings[bi].ty.kind == OL_TY_VOID) {
+            sema_err(S, s->line, "invalid let type");
+            return 0;
+          }
+        }
+        if (s->u.let_.binding_count == 1) {
+          OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
+          if (t0->kind == OL_TY_ALIAS) {
+            int tdi = ol_program_find_typedef(S->prog, t0->alias_name);
+            if (tdi >= 0) {
+              OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
+              if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
+                is_aggregate = 1;
+              }
+            }
+          }
+        } else {
+          for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+            OlTypeRef *t = &s->u.let_.bindings[bi].ty;
+            if (t->kind == OL_TY_ALIAS) {
+              int tdi = ol_program_find_typedef(S->prog, t->alias_name);
+              if (tdi >= 0) {
+                OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
+                if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
+                  sema_err(S, s->line, "multi-view let only supports scalar types");
+                  return 0;
+                }
+              }
             }
           }
         }
-        /* Aggregate types (struct/array) don't require initializer regardless of size */
+        for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+          uint32_t b = ty_size_bytes(S->prog, &s->u.let_.bindings[bi].ty) * 8u;
+          if (b == 0) {
+            sema_err(S, s->line, "let type has zero size");
+            return 0;
+          }
+          sum_bits += b;
+        }
+        if (sum_bits != bw) {
+          sema_err(S, s->line, "let view sizes must sum to bitwidth");
+          return 0;
+        }
         if (is_aggregate) {
-          /* Aggregate: no init required, bind the type */
-          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, 0)) {
+          OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
+          uint32_t expect_bits = ty_size_bytes(S->prog, t0) * 8u;
+          if (expect_bits != bw) {
+            sema_err(S, s->line, "let bitwidth does not match aggregate size");
+            return 0;
+          }
+          if (s->u.let_.init) {
+            if (!resolve_expr(S, s->u.let_.init)) return 0;
+            if (!type_eq(&s->u.let_.init->ty, t0)) {
+              sema_err(S, s->line, "let type mismatch");
+              return 0;
+            }
+          }
+          if (!bind_sym(S, s->u.let_.bindings[0].name, t0, 0, 0)) {
             sema_err(S, s->line, "duplicate let or oom");
             return 0;
           }
         } else {
-          /* Scalar: must have init expression */
           if (!s->u.let_.init) {
             sema_err(S, s->line, "scalar let requires initializer");
             return 0;
           }
           if (!resolve_expr(S, s->u.let_.init)) return 0;
-          if (!type_eq(&s->u.let_.init->ty, &s->u.let_.ty)) {
+          if (ty_size_bytes(S->prog, &s->u.let_.init->ty) * 8u != bw) {
+            sema_err(S, s->line, "initializer bit width must match let bitwidth");
+            return 0;
+          }
+          if (s->u.let_.binding_count == 1 &&
+              !type_eq(&s->u.let_.init->ty, &s->u.let_.bindings[0].ty)) {
             sema_err(S, s->line, "let type mismatch");
             return 0;
           }
-          if (!bind_sym(S, s->u.let_.name, &s->u.let_.ty, 0)) {
-            sema_err(S, s->line, "duplicate let or oom");
-            return 0;
+          {
+            uint32_t off = 0;
+            for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+              uint32_t nb = ty_size_bytes(S->prog, &s->u.let_.bindings[bi].ty);
+              if (!bind_sym(S, s->u.let_.bindings[bi].name, &s->u.let_.bindings[bi].ty, 0, off)) {
+                sema_err(S, s->line, "duplicate let or oom");
+                return 0;
+              }
+              off += nb;
+            }
           }
         }
         break;
@@ -693,14 +868,20 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
         if (lhs->kind == OL_EX_VAR) {
           SymSlot *sl = lookup_sym(S, lhs->u.var_name);
           int gi = ol_program_find_global(S->prog, lhs->u.var_name);
-          if (sl && gi >= 0) { sema_err(S, s->line, "assign target ambiguous"); return 0; }
-          if (sl) lhs_ty_ptr = &sl->ty;
-          if (gi >= 0) {
+          /* Globals are also in syms as file_global; ambiguity is local shadowing the same name. */
+          if (sl && gi >= 0 && !sl->is_file_global) { sema_err(S, s->line, "assign target ambiguous"); return 0; }
+          if (sl) {
+            lhs_ty_ptr = &sl->ty;
+            if (sl->is_file_global && gi >= 0 && global_storage_is_rodata(&S->prog->globals[(size_t)gi])) {
+              sema_err(S, s->line, "cannot assign to @rodata global");
+              return 0;
+            }
+          } else if (gi >= 0) {
+            lhs_ty_ptr = lookup_global_type(S->prog, lhs->u.var_name);
             if (global_storage_is_rodata(&S->prog->globals[(size_t)gi])) {
               sema_err(S, s->line, "cannot assign to @rodata global");
               return 0;
             }
-            lhs_ty_ptr = &S->prog->globals[(size_t)gi].ty;
           }
           if (!lhs_ty_ptr) { sema_err(S, s->line, "assign to unknown name"); return 0; }
           lhs_ty = *lhs_ty_ptr;
@@ -900,38 +1081,29 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
   }
 
   for (i = 0; i < p->global_count; ++i) {
-    for (k = i + 1; k < p->global_count; ++k) {
-      if (strcmp(p->globals[i].name, p->globals[k].name) == 0) {
-        snprintf(err, err_len, "duplicate global: %s", p->globals[i].name);
+    size_t bi;
+    for (bi = 0; bi < p->globals[i].binding_count; ++bi) {
+      size_t j, bj;
+      const char *na = p->globals[i].bindings[bi].name;
+      for (j = i; j < p->global_count; ++j) {
+        size_t bstart = (j == i) ? (bi + 1) : 0;
+        for (bj = bstart; bj < p->globals[j].binding_count; ++bj) {
+          if (strcmp(p->globals[j].bindings[bj].name, na) == 0) {
+            snprintf(err, err_len, "duplicate global: %s", na);
+            return 0;
+          }
+        }
+      }
+      if (find_func(p, na)) {
+        snprintf(err, err_len, "global name conflicts with function: %s", na);
+        return 0;
+      }
+      if (ol_program_find_extern(p, na) >= 0) {
+        snprintf(err, err_len, "global name conflicts with extern: %s", na);
         return 0;
       }
     }
-    if (find_func(p, p->globals[i].name)) {
-      snprintf(err, err_len, "global name conflicts with function: %s", p->globals[i].name);
-      return 0;
-    }
-    if (ol_program_find_extern(p, p->globals[i].name) >= 0) {
-      snprintf(err, err_len, "global name conflicts with extern: %s", p->globals[i].name);
-      return 0;
-    }
-    if (!type_is_valid(p, &p->globals[i].ty) || p->globals[i].ty.kind == OL_TY_VOID) {
-      snprintf(err, err_len, "invalid global type");
-      return 0;
-    }
-    if (p->globals[i].section == OL_GSEC_BSS && p->globals[i].init) {
-      snprintf(err, err_len, "@bss global cannot have initializer");
-      return 0;
-    }
-    if (global_storage_is_rodata(&p->globals[i])) {
-      if (!p->globals[i].init) {
-        snprintf(err, err_len, "@rodata global requires initializer");
-        return 0;
-      }
-      if (!init_expr_is_const(p->globals[i].init)) {
-        snprintf(err, err_len, "@rodata initializer must be constant");
-        return 0;
-      }
-    }
+    if (!validate_global_def(p, &p->globals[i], err, err_len)) return 0;
   }
 
   {
@@ -953,24 +1125,41 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
 
   for (i = 0; i < p->global_count; ++i) {
     size_t j;
+    int is_agg = 0;
     enter_scope(&S);
     for (j = 0; j < (size_t)i; ++j) {
-      if (!bind_sym(&S, p->globals[j].name, &p->globals[j].ty, 1)) {
+      if (!bind_global_def(&S, p, &p->globals[j])) {
         snprintf(err, err_len, "global bind oom");
         exit_scope(&S);
         return 0;
       }
     }
+    if (p->globals[i].binding_count == 1)
+      typedef_is_aggregate(p, &p->globals[i].bindings[0].ty, &is_agg);
     if (p->globals[i].init) {
       if (!resolve_expr(&S, p->globals[i].init)) {
         snprintf(err, err_len, "%s", S.err[0] ? S.err : "global init failed");
         exit_scope(&S);
         return 0;
       }
-      if (!type_eq(&p->globals[i].init->ty, &p->globals[i].ty)) {
-        snprintf(err, err_len, "global init type mismatch");
-        exit_scope(&S);
-        return 0;
+      if (is_agg) {
+        if (!type_eq(&p->globals[i].init->ty, &p->globals[i].bindings[0].ty)) {
+          snprintf(err, err_len, "global init type mismatch");
+          exit_scope(&S);
+          return 0;
+        }
+      } else {
+        if (ty_size_bytes(p, &p->globals[i].init->ty) * 8u != p->globals[i].bitwidth) {
+          snprintf(err, err_len, "global initializer bit width must match bitwidth");
+          exit_scope(&S);
+          return 0;
+        }
+        if (p->globals[i].binding_count == 1 &&
+            !type_eq(&p->globals[i].init->ty, &p->globals[i].bindings[0].ty)) {
+          snprintf(err, err_len, "global init type mismatch");
+          exit_scope(&S);
+          return 0;
+        }
       }
     }
     exit_scope(&S);
@@ -983,7 +1172,7 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
     }
     enter_scope(&S);
     for (k = 0; k < p->global_count; ++k) {
-      if (!bind_sym(&S, p->globals[k].name, &p->globals[k].ty, 1)) {
+      if (!bind_global_def(&S, p, &p->globals[k])) {
         snprintf(err, err_len, "duplicate global name vs function scope");
         exit_scope(&S);
         return 0;
@@ -997,7 +1186,7 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
         exit_scope(&S);
         return 0;
       }
-      if (!bind_sym(&S, p->funcs[i].params[k].name, &p->funcs[i].params[k].ty, 0)) {
+      if (!bind_sym(&S, p->funcs[i].params[k].name, &p->funcs[i].params[k].ty, 0, 0)) {
         snprintf(err, err_len, "duplicate param or oom");
         exit_scope(&S);
         exit_scope(&S);

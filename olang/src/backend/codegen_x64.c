@@ -1,3 +1,8 @@
+/*
+ * x86-64 lowering: type-checked OlProgram -> OobjObject (.oobj sections, syms,
+ * relocs). Frame layout and ABI here; parsing in frontend/parser.c, types in
+ * sema.c. Module map: docs/internals/compiler-modules.md
+ */
 #include "codegen_x64.h"
 
 #include "../frontend/ast.h"
@@ -39,6 +44,7 @@ typedef struct CG {
     int slot;
     OlTypeRef ty;  /* Element / value type; when indirect, slot holds ptr to this type */
     unsigned char indirect;
+    uint32_t view_byte_off; /* offset in shared blob; 0 for ordinary locals */
   } loc[256];
   int nloc;
 
@@ -89,6 +95,23 @@ static uint32_t type_size_bytes(const OlProgram *p, const OlTypeRef *t) {
       if (k < 0) return 0;
       return p->typedefs[k].size_bytes;
     }
+  }
+  return 0;
+}
+
+/* Linker symbol for the blob is always globals[gi].bindings[0].name; other views use PC32 addend. */
+static int cg_global_view(CG *g, int gi, const char *name, const OlTypeRef **out_ty, uint32_t *byte_off, const char **base_sym) {
+  OlGlobalDef *gd = &g->p->globals[(size_t)gi];
+  uint32_t off = 0;
+  size_t bi;
+  if (base_sym) *base_sym = gd->bindings[0].name;
+  for (bi = 0; bi < gd->binding_count; ++bi) {
+    if (strcmp(gd->bindings[bi].name, name) == 0) {
+      if (out_ty) *out_ty = &gd->bindings[bi].ty;
+      if (byte_off) *byte_off = off;
+      return 1;
+    }
+    off += type_size_bytes(g->p, &gd->bindings[bi].ty);
   }
   return 0;
 }
@@ -240,6 +263,11 @@ static void resolve_fixups(CG *g) {
 /* [rbp] = saved rbp, [rbp-8] = saved rbx, params/locals from [rbp-16] (slot 0). */
 static int32_t slot_disp(int slot) { return -(int32_t)(8 * ((size_t)slot + 2u)); }
 
+/* Byte `byte_off` within a blob whose first byte is at slot_disp(base_slot). */
+static int32_t slot_byte_disp(int base_slot, uint32_t byte_off) {
+  return slot_disp(base_slot) - (int32_t)byte_off;
+}
+
 /* gpr: 0=rax 1=rcx 2=rdx 3=rbx */
 static void emit_mov_gpr_from_slot(CG *g, int gpr, int slot) {
   int32_t d = slot_disp(slot);
@@ -315,6 +343,146 @@ static void emit_mov_eax_zext16_from_slot(CG *g, int slot) {
   }
 }
 
+static int cg_type_is_aggregate(CG *g, const OlTypeRef *t) {
+  int ti;
+  if (t->kind != OL_TY_ALIAS) return 0;
+  ti = ol_program_find_typedef(g->p, t->alias_name);
+  if (ti < 0) return 0;
+  return g->p->typedefs[ti].kind == OL_TYPEDEF_STRUCT || g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY;
+}
+
+static void emit_mov_r64_rbp_disp(CG *g, int32_t d) {
+  uint8_t rex = 0x48;
+  uint8_t modrm8 = (uint8_t)(0x45u | (0u << 3u));
+  uint8_t modrm32 = (uint8_t)(0x85u | (0u << 3u));
+  if (d >= -128 && d <= 127)
+    tx_copy(g, (uint8_t[]){rex, 0x8b, modrm8, (uint8_t)(uint8_t)d}, 4);
+  else {
+    tx_copy(g, (uint8_t[]){rex, 0x8b, modrm32}, 3);
+    tx_copy(g, (uint8_t *)&d, 4);
+  }
+}
+
+static void emit_load_rax_from_rbp_disp_typed(CG *g, int32_t d, const OlTypeRef *ty) {
+  if (type_is_byte_like(ty)) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x45, (uint8_t)(uint8_t)d}, 4);
+    else {
+      tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x85}, 3);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+    return;
+  }
+  if (type_is_word_like(ty)) {
+    if (ty->kind == OL_TY_I16) {
+      if (d >= -128 && d <= 127)
+        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0x45, (uint8_t)(uint8_t)d}, 5);
+      else {
+        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0x85}, 4);
+        tx_copy(g, (uint8_t *)&d, 4);
+      }
+    } else {
+      if (d >= -128 && d <= 127)
+        tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x45, (uint8_t)(uint8_t)d}, 4);
+      else {
+        tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x85}, 3);
+        tx_copy(g, (uint8_t *)&d, 4);
+      }
+    }
+    return;
+  }
+  if (type_is_i32_like(ty)) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x48, 0x63, 0x45, (uint8_t)(uint8_t)d}, 4);
+    else {
+      tx_copy(g, (uint8_t[]){0x48, 0x63, 0x85}, 3);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+    return;
+  }
+  if (type_is_u32_like(ty) || ty->kind == OL_TY_B32) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x8b, 0x45, (uint8_t)(uint8_t)d}, 3);
+    else {
+      tx_copy(g, (uint8_t[]){0x8b, 0x85}, 2);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+    return;
+  }
+  emit_mov_r64_rbp_disp(g, d);
+}
+
+static void emit_store_rax_to_rbp_disp_typed(CG *g, int32_t d, const OlTypeRef *ty) {
+  uint32_t sz = type_size_bytes(g->p, ty);
+  uint8_t rex = 0x48;
+  if (sz == 1u) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x88, 0x45, (uint8_t)(uint8_t)d}, 3);
+    else {
+      tx_copy(g, (uint8_t[]){0x88, 0x85}, 2);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+  } else if (sz == 2u) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x66, 0x89, 0x45, (uint8_t)(uint8_t)d}, 4);
+    else {
+      tx_copy(g, (uint8_t[]){0x66, 0x89, 0x85}, 3);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+  } else if (sz == 4u) {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){0x89, 0x45, (uint8_t)(uint8_t)d}, 3);
+    else {
+      tx_copy(g, (uint8_t[]){0x89, 0x85}, 2);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+  } else {
+    if (d >= -128 && d <= 127)
+      tx_copy(g, (uint8_t[]){rex, 0x89, (uint8_t)(0x45 | (0 << 3)), (uint8_t)(uint8_t)d}, 4);
+    else {
+      tx_copy(g, (uint8_t[]){rex, 0x89, (uint8_t)(0x85 | (0 << 3))}, 3);
+      tx_copy(g, (uint8_t *)&d, 4);
+    }
+  }
+}
+
+static void emit_copy_rs_slot_to_rbp_disp(CG *g, int rs, int32_t d, const OlTypeRef *ty) {
+  int32_t ds;
+  if (type_is_float(ty)) {
+    if (ty->kind == OL_TY_F64) {
+      ds = slot_disp(rs);
+      if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+      else {
+        tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
+        tx_copy(g, (uint8_t *)&ds, 4);
+      }
+      if (d >= -128 && d <= 127) tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)d}, 5);
+      else {
+        tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
+        tx_copy(g, (uint8_t *)&d, 4);
+      }
+    } else if (ty->kind == OL_TY_F32) {
+      ds = slot_disp(rs);
+      if (ds >= -128 && ds <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)ds}, 5);
+      else {
+        tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
+        tx_copy(g, (uint8_t *)&ds, 4);
+      }
+      if (d >= -128 && d <= 127) tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)d}, 5);
+      else {
+        tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
+        tx_copy(g, (uint8_t *)&d, 4);
+      }
+    } else {
+      emit_mov_r64_rbp(g, 0, rs);
+      emit_store_rax_to_rbp_disp_typed(g, d, ty);
+    }
+    return;
+  }
+  emit_mov_r64_rbp(g, 0, rs);
+  emit_store_rax_to_rbp_disp_typed(g, d, ty);
+}
+
 static void emit_branch_cond_to_rax(CG *g, const OlExpr *cond, int slot) {
   if (cond && type_is_byte_like(&cond->ty))
     emit_mov_eax_zext8_from_slot(g, slot);
@@ -336,15 +504,15 @@ static void emit_mov_rsi_rax(CG *g) { tx_copy(g, (uint8_t[]){0x48, 0x89, 0xc6}, 
 static void emit_mov_r8_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc0}, 3); }
 static void emit_mov_r9_rax(CG *g) { tx_copy(g, (uint8_t[]){0x49, 0x89, 0xc1}, 3); }
 
-static void emit_lea_rax_rip(CG *g, const char *sym) {
+static void emit_lea_rax_rip(CG *g, const char *sym, int32_t addend) {
   size_t reloc_at;
   tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x05}, 3);
   reloc_at = g->tx_len;
   tx_copy(g, (uint8_t[]){0, 0, 0, 0}, 4);
-  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, 0)) CG_FAIL(g, "reloc oom");
+  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "reloc oom");
 }
 
-static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz) {
+static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz, int32_t addend) {
   size_t reloc_at;
   if (sz == 1u) {
     tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x05}, 3); /* movzx eax, byte [rip+d] */
@@ -360,10 +528,10 @@ static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz) {
   }
   reloc_at = g->tx_len;
   tx_copy(g, (uint8_t[]){0, 0, 0, 0}, 4);
-  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, 0)) CG_FAIL(g, "global load reloc");
+  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "global load reloc");
 }
 
-static void emit_mov_to_global(CG *g, const char *sym, uint32_t sz) {
+static void emit_mov_to_global(CG *g, const char *sym, uint32_t sz, int32_t addend) {
   size_t reloc_at;
   if (sz == 1u) {
     tx_copy(g, (uint8_t[]){0x88, 0x05}, 2); /* mov byte [rip+d], al */
@@ -379,7 +547,7 @@ static void emit_mov_to_global(CG *g, const char *sym, uint32_t sz) {
   }
   reloc_at = g->tx_len;
   tx_copy(g, (uint8_t[]){0, 0, 0, 0}, 4);
-  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, 0)) CG_FAIL(g, "global store reloc");
+  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "global store reloc");
 }
 
 static void emit_call_sym(CG *g, const char *sym) {
@@ -470,7 +638,7 @@ static const char *sym_for_fn_ref(CG *g, const char *user) {
   return user;
 }
 
-static int bind_local(CG *g, const char *name, int slot, const OlTypeRef *ty) {
+static int bind_local(CG *g, const char *name, int slot, const OlTypeRef *ty, uint32_t view_byte_off) {
   if (g->nloc >= 256) {
     CG_FAIL(g, "too many locals");
     return 0;
@@ -483,6 +651,7 @@ static int bind_local(CG *g, const char *name, int slot, const OlTypeRef *ty) {
     memset(&g->loc[g->nloc].ty, 0, sizeof(OlTypeRef));
   }
   g->loc[g->nloc].indirect = 0u;
+  g->loc[g->nloc].view_byte_off = view_byte_off;
   g->nloc++;
   return 1;
 }
@@ -600,7 +769,7 @@ static int gen_expr(CG *g, OlExpr *e) {
     case OL_EX_STR: {
       const char *sym = g->p->strings[e->u.str_idx].sym;
       out = alloc_slot(g);
-      emit_lea_rax_rip(g, sym);
+      emit_lea_rax_rip(g, sym, 0);
       emit_mov_rbp_r64(g, out, 0);
       return out;
     }
@@ -652,21 +821,84 @@ static int gen_expr(CG *g, OlExpr *e) {
           emit_mov_rbp_r64(g, out, 0);
           return out;
         }
-        return sl;
+        {
+          OlTypeRef *lty = &g->loc[li].ty;
+          int base_slot = g->loc[li].slot;
+          uint32_t voff = g->loc[li].view_byte_off;
+          int32_t d = slot_byte_disp(base_slot, voff);
+          if (cg_type_is_aggregate(g, lty)) {
+            return sl;
+          }
+          if (type_is_float(lty)) {
+            int32_t od;
+            out = alloc_slot(g);
+            od = slot_disp(out);
+            if (lty->kind == OL_TY_F64) {
+              if (d >= -128 && d <= 127)
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&d, 4);
+              }
+              if (od >= -128 && od <= 127)
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&od, 4);
+              }
+            } else if (lty->kind == OL_TY_F32) {
+              if (d >= -128 && d <= 127)
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&d, 4);
+              }
+              if (od >= -128 && od <= 127)
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
+              else {
+                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
+                tx_copy(g, (uint8_t *)&od, 4);
+              }
+            } else {
+              if (d >= -128 && d <= 127)
+                tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x45, (uint8_t)(int8_t)d}, 4);
+              else {
+                tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x85}, 3);
+                tx_copy(g, (uint8_t *)&d, 4);
+              }
+              if (!emit_load_at_rax(g, 2u)) {
+                cg_err(g, "f16 load");
+                return -1;
+              }
+              emit_mov_rbp_r64(g, out, 0);
+            }
+            return out;
+          }
+          out = alloc_slot(g);
+          emit_load_rax_from_rbp_disp_typed(g, d, lty);
+          emit_mov_rbp_r64(g, out, 0);
+          return out;
+        }
       }
       /* Global variable: check if it's an aggregate type */
-      gi = ol_program_find_global(g->p, e->u.var_name);
-      if (gi < 0) return -1;
-      gsz = type_size_bytes(g->p, &g->p->globals[(size_t)gi].ty);
-      /* Aggregate type (>8 bytes): return address (lea), not load */
-      if (gsz > 8u) {
-        out = alloc_slot(g);
-        emit_lea_rax_rip(g, g->p->globals[(size_t)gi].name);
-        emit_mov_rbp_r64(g, out, 0);
-        return out;
+      {
+        const OlTypeRef *gty = NULL;
+        uint32_t goff = 0;
+        const char *bsym = NULL;
+        gi = ol_program_find_global(g->p, e->u.var_name);
+        if (gi < 0) return -1;
+        if (!cg_global_view(g, gi, e->u.var_name, &gty, &goff, &bsym)) return -1;
+        gsz = type_size_bytes(g->p, gty);
+        /* Aggregate type (>8 bytes): return address (lea), not load */
+        if (gsz > 8u) {
+          out = alloc_slot(g);
+          emit_lea_rax_rip(g, bsym, (int32_t)goff);
+          emit_mov_rbp_r64(g, out, 0);
+          return out;
+        }
+        /* Scalar type: load value from section */
+        emit_mov_from_global(g, bsym, gsz, (int32_t)goff);
       }
-      /* Scalar type: load value from section */
-      emit_mov_from_global(g, g->p->globals[(size_t)gi].name, gsz);
       if (g->failed) return -1;
       out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
@@ -1059,7 +1291,8 @@ static int gen_expr(CG *g, OlExpr *e) {
           emit_mov_rbp_r64(g, out, 0);
           return out;
         }
-        d = slot_disp(s);
+        if (li_addr < 0) return -1;
+        d = slot_byte_disp(s, g->loc[li_addr].view_byte_off);
         if (d >= -128 && d <= 127) {
           tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x45, (uint8_t)(uint8_t)d}, 4);
         } else {
@@ -1071,16 +1304,21 @@ static int gen_expr(CG *g, OlExpr *e) {
         return out;
       }
       if (e->u.addr.addr_kind == OL_ADDR_GLOBAL) {
+        const OlTypeRef *gty = NULL;
+        uint32_t goff = 0;
+        const char *bsym = NULL;
         gi = ol_program_find_global(g->p, e->u.addr.name);
         if (gi < 0) return -1;
-        emit_lea_rax_rip(g, g->p->globals[(size_t)gi].name);
+        if (!cg_global_view(g, gi, e->u.addr.name, &gty, &goff, &bsym)) return -1;
+        (void)gty;
+        emit_lea_rax_rip(g, bsym, (int32_t)goff);
         if (g->failed) return -1;
         out = alloc_slot(g);
         emit_mov_rbp_r64(g, out, 0);
         return out;
       }
       if (e->u.addr.addr_kind == OL_ADDR_SYMBOL) {
-        emit_lea_rax_rip(g, sym_for_fn_ref(g, e->u.addr.name));
+        emit_lea_rax_rip(g, sym_for_fn_ref(g, e->u.addr.name), 0);
         if (g->failed) return -1;
         out = alloc_slot(g);
         emit_mov_rbp_r64(g, out, 0);
@@ -1190,15 +1428,23 @@ static int gen_expr(CG *g, OlExpr *e) {
         if (esz == 8) {
           int gi = ol_program_find_global(g->p, arr_name);
           if (gi >= 0) {
-            uint32_t gsz = type_size_bytes(g->p, &g->p->globals[(size_t)gi].ty);
-            if (gsz > 8u) { /* Aggregate global (array/struct) */
-              if (g->p->globals[(size_t)gi].ty.kind == OL_TY_ALIAS) {
-                ti = ol_program_find_typedef(g->p, g->p->globals[(size_t)gi].ty.alias_name);
-                if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
-                  const char *elem = g->p->typedefs[ti].elem_type;
-                  if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
-                  else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
-                  else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
+            const OlTypeRef *gty = NULL;
+            uint32_t goff = 0;
+            const char *bsym = NULL;
+            if (!cg_global_view(g, gi, arr_name, &gty, &goff, &bsym)) return -1;
+            (void)goff;
+            (void)bsym;
+            {
+              uint32_t gsz = type_size_bytes(g->p, gty);
+              if (gsz > 8u) { /* Aggregate global (array/struct) */
+                if (gty->kind == OL_TY_ALIAS) {
+                  ti = ol_program_find_typedef(g->p, gty->alias_name);
+                  if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
+                    const char *elem = g->p->typedefs[ti].elem_type;
+                    if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+                    else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+                    else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
+                  }
                 }
               }
             }
@@ -1250,13 +1496,26 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         break;
       }
       case OL_ST_LET: {
-        uint32_t let_sz = type_size_bytes(g->p, &s->u.let_.ty);
-        int num_slots = (int)((let_sz + 7u) / 8u);  /* Round up to 8-byte slots */
+        uint32_t bw = s->u.let_.bitwidth;
+        uint32_t blob_bytes = (bw + 7u) / 8u;
+        int num_slots = (int)((blob_bytes + 7u) / 8u);
+        size_t bi;
         int is_aggregate = 0;
+        int base_slot;
         int ptr_slot;
-        /* Check if type is aggregate (struct or array) */
-        if (s->u.let_.ty.kind == OL_TY_ALIAS) {
-          int tdi = ol_program_find_typedef(g->p, s->u.let_.ty.alias_name);
+        OlTypeRef *t0;
+        uint32_t let_sz;
+        if (s->u.let_.alloc != OL_ALLOC_STACK) {
+          cg_err(g, "local let must be @stack");
+          return 0;
+        }
+        if (s->u.let_.binding_count < 1u) {
+          cg_err(g, "let has no bindings");
+          return 0;
+        }
+        t0 = &s->u.let_.bindings[0].ty;
+        if (s->u.let_.binding_count == 1u && t0->kind == OL_TY_ALIAS) {
+          int tdi = ol_program_find_typedef(g->p, t0->alias_name);
           if (tdi >= 0) {
             OlTypeDefKind tdk = g->p->typedefs[(size_t)tdi].kind;
             if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
@@ -1264,36 +1523,47 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             }
           }
         }
-        if (!is_aggregate) {
-          /* Scalar type: generate init expression, bind to result slot */
-          ptr_slot = gen_expr(g, s->u.let_.init);
-          if (ptr_slot < 0) return 0;
-        } else {
-          /* Aggregate type (array/struct):
-           * 1. Allocate data space (num_slots slots)
-           * 2. Create pointer variable (1 slot) holding data address
-           */
-          int data_slot = alloc_slots(g, num_slots);
-          if (data_slot < 0) return 0;
-          /* Compute data address: lea rax, [rbp + slot_disp(data_slot)] */
-          ptr_slot = alloc_slot(g);
-          if (ptr_slot < 0) return 0;
+        if (is_aggregate) {
+          let_sz = type_size_bytes(g->p, t0);
+          num_slots = (int)((let_sz + 7u) / 8u);
           {
-            int32_t d = slot_disp(data_slot);
-            uint8_t rex = 0x48;
-            uint8_t modrm;
-            if (d >= -128 && d <= 127) {
-              modrm = (uint8_t)(0x45u | (0u << 3u)); /* rax, [rbp+disp8] */
-              tx_copy(g, (uint8_t[]){rex, 0x8d, modrm, (uint8_t)(int8_t)d}, 4);
-            } else {
-              modrm = (uint8_t)(0x85u | (0u << 3u)); /* rax, [rbp+disp32] */
-              tx_copy(g, (uint8_t[]){rex, 0x8d, modrm}, 3);
-              tx_copy(g, (uint8_t *)&d, 4);
+            int data_slot = alloc_slots(g, num_slots);
+            if (data_slot < 0) return 0;
+            ptr_slot = alloc_slot(g);
+            if (ptr_slot < 0) return 0;
+            {
+              int32_t d = slot_disp(data_slot);
+              uint8_t rex = 0x48;
+              uint8_t modrm;
+              if (d >= -128 && d <= 127) {
+                modrm = (uint8_t)(0x45u | (0u << 3u)); /* rax, [rbp+disp8] */
+                tx_copy(g, (uint8_t[]){rex, 0x8d, modrm, (uint8_t)(int8_t)d}, 4);
+              } else {
+                modrm = (uint8_t)(0x85u | (0u << 3u)); /* rax, [rbp+disp32] */
+                tx_copy(g, (uint8_t[]){rex, 0x8d, modrm}, 3);
+                tx_copy(g, (uint8_t *)&d, 4);
+              }
+              emit_mov_rbp_r64(g, ptr_slot, 0);
             }
-            emit_mov_rbp_r64(g, ptr_slot, 0);
+          }
+          if (!bind_local(g, s->u.let_.bindings[0].name, ptr_slot, t0, 0u)) return 0;
+          break;
+        }
+        base_slot = alloc_slots(g, num_slots);
+        if (base_slot < 0) return 0;
+        if (s->u.let_.init) {
+          int rs = gen_expr(g, s->u.let_.init);
+          if (rs < 0) return 0;
+          emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &s->u.let_.init->ty);
+        }
+        {
+          uint32_t off = 0;
+          for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+            uint32_t nb = type_size_bytes(g->p, &s->u.let_.bindings[bi].ty);
+            if (!bind_local(g, s->u.let_.bindings[bi].name, base_slot, &s->u.let_.bindings[bi].ty, off)) return 0;
+            off += nb;
           }
         }
-        if (!bind_local(g, s->u.let_.name, ptr_slot, &s->u.let_.ty)) return 0;
         break;
       }
       case OL_ST_ASSIGN: {
@@ -1308,9 +1578,13 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
           int ls = lookup_slot(g, lhs->u.var_name);
           uint32_t asz;
           if (gi >= 0) {
-            asz = type_size_bytes(g->p, &g->p->globals[(size_t)gi].ty);
+            const OlTypeRef *gty = NULL;
+            uint32_t goff = 0;
+            const char *bsym = NULL;
+            if (!cg_global_view(g, gi, lhs->u.var_name, &gty, &goff, &bsym)) return 0;
+            asz = type_size_bytes(g->p, gty);
             emit_mov_r64_rbp(g, 0, rs);
-            emit_mov_to_global(g, g->p->globals[(size_t)gi].name, asz);
+            emit_mov_to_global(g, bsym, asz, (int32_t)goff);
             if (g->failed) return 0;
             break;
           }
@@ -1416,9 +1690,23 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
               break;
             }
           }
-          /* Non-aggregate: simple pointer/value copy */
-          emit_mov_r64_rbp(g, 0, rs);
-          emit_mov_rbp_r64(g, ls, 0);
+          /* Non-aggregate: scalar / ptr / shared view */
+          {
+            int lidx = find_local_loc(g, lhs->u.var_name);
+            OlTypeRef *lty = lookup_local_ty(g, lhs->u.var_name);
+            int32_t d;
+            if (lidx < 0 || !lty) {
+              cg_err(g, "assign to unknown local");
+              return 0;
+            }
+            d = slot_byte_disp(ls, g->loc[lidx].view_byte_off);
+            if (type_is_float(lty)) {
+              emit_copy_rs_slot_to_rbp_disp(g, rs, d, lty);
+            } else {
+              emit_mov_r64_rbp(g, 0, rs);
+              emit_store_rax_to_rbp_disp_typed(g, d, lty);
+            }
+          }
           break;
         } else if (lhs->kind == OL_EX_INDEX) {
           /* Array index assignment: arr[idx] = value */
@@ -1443,15 +1731,23 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
             if (esz == 8) {
               int gi = ol_program_find_global(g->p, arr_name);
               if (gi >= 0) {
-                uint32_t gsz = type_size_bytes(g->p, &g->p->globals[(size_t)gi].ty);
-                if (gsz > 8u) { /* Aggregate global (array/struct) */
-                  if (g->p->globals[(size_t)gi].ty.kind == OL_TY_ALIAS) {
-                    int ti = ol_program_find_typedef(g->p, g->p->globals[(size_t)gi].ty.alias_name);
-                    if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
-                      const char *elem = g->p->typedefs[ti].elem_type;
-                      if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
-                      else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
-                      else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
+                const OlTypeRef *gty = NULL;
+                uint32_t goff = 0;
+                const char *bsym = NULL;
+                if (!cg_global_view(g, gi, arr_name, &gty, &goff, &bsym)) return 0;
+                (void)goff;
+                (void)bsym;
+                {
+                  uint32_t gsz = type_size_bytes(g->p, gty);
+                  if (gsz > 8u) { /* Aggregate global (array/struct) */
+                    if (gty->kind == OL_TY_ALIAS) {
+                      int ti = ol_program_find_typedef(g->p, gty->alias_name);
+                      if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
+                        const char *elem = g->p->typedefs[ti].elem_type;
+                        if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
+                        else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
+                        else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
+                      }
                     }
                   }
                 }
@@ -1727,7 +2023,7 @@ static int gen_function(CG *g, OlFuncDef *fn) {
           tx_copy(g, (uint8_t *)&d, 4);
         }
       }
-      if (!bind_local(g, fn->params[i].name, slot, &fn->params[i].ty)) return 0;
+      if (!bind_local(g, fn->params[i].name, slot, &fn->params[i].ty, 0u)) return 0;
     }
   }
 
@@ -1772,7 +2068,7 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
   for (i = 0; i < g->p->global_count; ++i) gl[i].kind = -1;
   for (i = 0; i < g->p->global_count; ++i) {
     OlGlobalDef *gd = &g->p->globals[i];
-    uint32_t sz = type_size_bytes(g->p, &gd->ty);
+    uint32_t sz = (gd->bitwidth + 7u) / 8u;
     size_t al = (sz >= 8u) ? 8u : ((sz >= 4u) ? 4u : 1u);
     int use_ro = 0, use_data = 0, use_bss = 0;
     const char *secname = ".data";
@@ -2093,7 +2389,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
       oobj_free(out);
       return 0;
     }
-    if (!oobj_append_symbol(out, program->globals[i].name, secix, gl[i].off, 1)) {
+    if (!oobj_append_symbol(out, program->globals[i].bindings[0].name, secix, gl[i].off, 1)) {
       snprintf(err, err_len, "oom global sym");
       oobj_free(out);
       return 0;

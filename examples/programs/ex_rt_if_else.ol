@@ -1,4 +1,4 @@
-extern fn main() -> i32 {
+extern i32 main() {
   if (true) {
     return 0;
   } else {

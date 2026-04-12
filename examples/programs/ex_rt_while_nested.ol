@@ -1,4 +1,4 @@
-extern fn main() -> i32 {
+extern i32 main() {
   while (false) {
     while (false) {
       return 1;

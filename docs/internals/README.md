@@ -12,6 +12,7 @@ Documentation for contributors.
 |-------|----------|
 | Architecture | [architecture.md](architecture.md) |
 | Compiler | [compiler.md](compiler.md) |
+| Compiler module boundaries | [compiler-modules.md](compiler-modules.md) |
 | Assembler | [assembler.md](assembler.md) |
 | Linker | [linker.md](linker.md) |
 | Object Format | [specs/oobj.md](specs/oobj.md) |

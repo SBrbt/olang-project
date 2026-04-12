@@ -165,6 +165,22 @@ struct OlExpr {
   } u;
 };
 
+typedef enum OlAllocKind {
+  OL_ALLOC_NONE = 0,
+  OL_ALLOC_STACK,   /* let x<i32> @stack<32>(...) — locals only */
+  OL_ALLOC_DATA,
+  OL_ALLOC_BSS,
+  OL_ALLOC_RODATA,
+  OL_ALLOC_CUSTOM
+} OlAllocKind;
+
+#define OL_MAX_LET_BINDINGS 32
+
+typedef struct OlLetBinding {
+  char name[128];
+  OlTypeRef ty;
+} OlLetBinding;
+
 typedef enum OlStmtKind {
   OL_ST_BLOCK = 1,
   OL_ST_LET,
@@ -188,9 +204,12 @@ struct OlStmt {
       OlStmt *first;
     } block;
     struct {
-      char name[128];
-      OlTypeRef ty;
+      OlLetBinding bindings[OL_MAX_LET_BINDINGS];
+      size_t binding_count;
+      uint32_t bitwidth; /* total bits; sum of binding types must match */
+      OlAllocKind alloc;
       OlExpr *init;
+      char custom_section[128];
     } let_;
     struct {
       OlExpr *lhs;  /* Left value: can be VAR, INDEX, FIELD */
@@ -235,8 +254,9 @@ typedef enum OlGlobalSection {
 } OlGlobalSection;
 
 typedef struct OlGlobalDef {
-  char name[128];
-  OlTypeRef ty;
+  OlLetBinding bindings[OL_MAX_LET_BINDINGS];
+  size_t binding_count;
+  uint32_t bitwidth; /* sum of view sizes; linker symbol is bindings[0].name */
   OlExpr *init; /* NULL => .bss (or zero .data if @data) */
   OlGlobalSection section;
   char custom_section[128]; /* when section == OL_GSEC_CUSTOM, e.g. ".mydata" */

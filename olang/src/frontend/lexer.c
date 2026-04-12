@@ -34,7 +34,6 @@ static void skip_ws(OlLexer *L) {
 
 static int kw_tok(const char *s) {
   if (strcmp(s, "extern") == 0) return TOK_KW_EXTERN;
-  if (strcmp(s, "fn") == 0) return TOK_KW_FN;
   if (strcmp(s, "let") == 0) return TOK_KW_LET;
   if (strcmp(s, "if") == 0) return TOK_KW_IF;
   if (strcmp(s, "else") == 0) return TOK_KW_ELSE;

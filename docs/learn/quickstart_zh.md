@@ -37,7 +37,7 @@ make check
 在`examples/programs`里创建 `hello.ol`：
 
 ```olang
-extern fn main() -> i32 {
+extern i32 main() {
     return 42;
 }
 ```
@@ -68,6 +68,6 @@ echo $?
 
 **Q: "标量需要初始值"？**
 ```olang
-let x: i32 = 0i32;  // ✓
-let y: i32;         // ✗ 标量必须初始化
+let x<i32> @stack<32>(0i32);  // ✓
+// let y<i32> @stack<32>();   // ✗ 标量必须初始化
 ```

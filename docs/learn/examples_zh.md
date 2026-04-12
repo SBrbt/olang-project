@@ -4,11 +4,11 @@
 
 ---
 
-30+ 个可运行示例。
+50+ 个可运行示例（`examples/programs/ex_*.ol`，由 `make check` 批量运行）。
 
 ### POSIX 封装（`libposix.kasm`）
 
-共用的 `extern fn posix_*` 声明在 [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol)。示例里用 `#include "posix_abi.ol"`；`examples/olc` 会传入 `-I` 以解析该路径。
+共用的 `extern` POSIX 声明（如 `extern i64 posix_write(...);`）在 [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol)。示例里用 `#include "posix_abi.ol"`；`examples/olc` 会传入 `-I` 以解析该路径。
 
 ### 快速运行
 
@@ -40,6 +40,9 @@ make check
 | `ex_rt_unsigned_types.ol` | 无符号运算 |
 | `ex_rt_neg.ol` | 一元负号 |
 | `ex_rt_load_store_i32.ol` | 内存操作 |
+| `ex_rt_multi_view.ol` | 栈上多绑定（多类型共享一块存储） |
+| `ex_rt_global_sections.ol` | 全局变量与各段（`@data` / `@bss` / `@rodata`） |
+| `ex_rt_global_multi_view.ol` | 文件级多绑定（与栈上多视图规则一致） |
 
 #### 控制流
 

@@ -18,6 +18,10 @@ bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
 
 OLang is a compiled language that generates ELF directly with zero external dependencies.
 
+### Design stance
+
+OLang **deliberately** exposes low-level control (memory layout, raw pointers, reinterpreting bit patterns) instead of hiding the machine model. The compiler enforces the type system and many static rules, but **runtime safety**—avoiding out-of-bounds access, use-after-free, and other undefined behavior—is **your responsibility as a low-level developer**. The language does not pretend to guarantee the same things a managed or proof-carrying runtime would.
+
 ### Documentation Map
 
 | I want to... | Go here |

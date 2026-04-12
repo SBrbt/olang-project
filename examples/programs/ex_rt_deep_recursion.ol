@@ -1,12 +1,12 @@
-fn fib(n: i32) -> i32 {
+i32 fib(n: i32) {
   if (n < 2) {
     return n;
   }
-  let a: i32 = fib(n - 1);
+  let a<i32> @stack<32>(fib(n - 1));
   return fib(n - 2) + a;
 }
 
-extern fn main() -> i32 {
+extern i32 main() {
   if (fib(10) == 55) {
     return 0;
   }

@@ -16,7 +16,7 @@
 
 #### Keywords
 
-- **Syntax / control:** `extern`, `fn`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
+- **Syntax / control:** `extern`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
 - **Operations:** `cast`, `reinterpret`, `load`, `store`, `addr`, `deref`, `as`
 - **Types / literals:** `void`, `bool`, `ptr`, `true`, `false`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `f32`, `f64`, `b8`, `b16`, `b32`, `b64`
 
@@ -81,21 +81,37 @@ type Int5 = array<i32, 5>;
 ```olang
 cast<T>(expr)           // explicit conversion (see [types](types.md))
 reinterpret<T>(expr)    // same bit width, different type (no bool; no aggregates)
-load<T>(ptr)            // read from pointer
+load<T>(ptr)            // read from pointer (rvalue; does not create a named object)
 store<T>(ptr, val)      // write to pointer
-addr Ident   // address: resolves local name, then global `let`, then extern / `fn` symbol
+addr Ident   // address: local name, then global `let`, then `extern` or function symbol (rvalue `ptr`)
 ```
 
 Any local of type `ptr` may be used with `deref` (the slot continues to hold the pointer value at runtime).
+
+Named storage is introduced only by `let` with an **allocator** (see below). Literals and the results of `load` / `addr` are **values** (typical rvalue uses); the current code generator may still spill expression results to stack slots as an implementation detail.
 
 ---
 
 ### Statements
 
-#### Variable Binding
+#### Variable binding (named storage)
+
+Inside a function, only **`@stack`** is allowed. Each binding is `Ident < Type >`. One or more bindings may share a single stack allocation; the integer in `@stack<bits>` is the **total size in bits**; the sum of all binding types’ sizes (in bits) must equal that value. Layout is a tight pack in declaration order.
+
 ```olang
-let Ident: Type = Expr;  // scalars (primitives) must be initialized
-let Ident: Type;         // aggregates (arrays/structs) can defer initialization
+let x<i32> @stack<32>(Expr);                    // scalar: initializer required; bit width matches type
+let a<i32> b<i32> @stack<64>(Expr);            // two i32 views on one 64-bit object
+let s<MyStruct> @stack<N>();                  // aggregate: optional init; N = 8 * sizeof(MyStruct)
+```
+
+At file scope, use a **global allocator** (not `@stack`). Like local `let`, you may list **one or more** `Ident < Type >` sharing one static blob; after `@data` / `@bss` / `@rodata` / `@section("name")` comes **`<bits>`** (total bit width), and the sum of binding sizes in bits must match. With multiple names, only **scalar** types are allowed; a single binding may be an aggregate (struct/array). The **first** binding name is the linker symbol for the object; other names refer to offsets into that symbol.
+
+```olang
+let x<i32> @data<32>(Expr);                    // .data
+let y<i64> @bss<64>();                        // .bss (no initializer)
+let c<i32> @rodata<32>(Expr);                  // .rodata (constant initializer)
+let z<i32> @section("name")<32>(Expr);         // custom section
+let a<i32> b<i32> @data<64>(Expr);             // two i32 views on one 64-bit blob (example)
 ```
 
 #### Assignment
@@ -126,15 +142,18 @@ return Expr;
 ### Top-level Definitions
 
 #### Functions
+
+Return type comes before the name (C-style). Parameters use `name: Type`. Use `void` for no return value.
+
 ```olang
-// Internal function
-fn name(params) -> Type { body }
+// Internal (single translation unit)
+Type name(params) { body }
 
-// Exported function
-extern fn name(params) -> Type { body }
+// Exported definition
+extern Type name(params) { body }
 
-// External declaration
-extern fn name(params) -> Type;
+// Forward declaration only
+extern Type name(params);
 ```
 
 #### Parameters
@@ -145,17 +164,11 @@ Param  ::= Ident: Type
 
 **Limit**: up to 8 register parameters; additional parameters are passed on the stack.
 
-#### Global Variables
-```olang
-[@data | @bss | @rodata | @section("name")]  // optional section attributes
-let Ident: Type = Expr;
-```
-
 ---
 
 ### Limitations
 
-- Scalar `let` must be initialized
+- Scalar `@stack` / global `let` must have an initializer (or use `@bss` without init where allowed)
 - No compound assignment (`+=`, `-=`)
 - No increment/decrement (`++`, `--`)
 - No array bounds checking

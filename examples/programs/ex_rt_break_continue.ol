@@ -1,5 +1,5 @@
-extern fn main() -> i32 {
-  let i: i32 = 0;
+extern i32 main() {
+  let i<i32> @stack<32>(0);
   while (true) {
     i = i + 1;
     if (i == 1) {

@@ -4,11 +4,11 @@
 
 ---
 
-30+ runnable examples.
+50+ runnable examples (`examples/programs/ex_*.ol`, exercised by `make check`).
 
 ### POSIX syscall shims (`libposix.kasm`)
 
-Shared `extern fn posix_*` declarations live in [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol). Example programs use `#include "posix_abi.ol"`; `examples/olc` passes `-I` so that path resolves.
+Shared `extern` POSIX declarations (e.g. `extern i64 posix_write(...);`) live in [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol). Example programs use `#include "posix_abi.ol"`; `examples/olc` passes `-I` so that path resolves.
 
 ### Quick Run
 
@@ -40,6 +40,9 @@ make check
 | `ex_rt_unsigned_types.ol` | Unsigned arithmetic |
 | `ex_rt_neg.ol` | Unary negation |
 | `ex_rt_load_store_i32.ol` | Memory operations |
+| `ex_rt_multi_view.ol` | Multi-binding on stack (several types, one blob) |
+| `ex_rt_global_sections.ol` | Globals and sections (`@data` / `@bss` / `@rodata`) |
+| `ex_rt_global_multi_view.ol` | File-scope multi-binding (same rules as stack) |
 
 #### Control Flow
 

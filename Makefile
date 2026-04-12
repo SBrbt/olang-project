@@ -41,8 +41,11 @@ $(BIN_DIR)/olprep: $(BIN_DIR) preproc/src/main.c
 clean:
 	rm -rf $(BIN_DIR) examples/out
 
-check: all check-link-script check-alinker check-kasm check-preproc check-olang
+check: all check-link-script check-doc-refs check-alinker check-kasm check-preproc check-olang
 	@echo "OK: all checks passed"
+
+check-doc-refs:
+	python3 scripts/verify_doc_olang_refs.py
 
 check-preproc: $(BIN_DIR)/olprep
 	bash tests/preproc/include.sh
@@ -66,4 +69,4 @@ $(BIN_DIR)/link_script_test: $(BIN_DIR) tests/link_script_test.c common/link_scr
 check-link-script: $(BIN_DIR)/link_script_test
 	$(BIN_DIR)/link_script_test
 
-.PHONY: all clean check check-link-script check-alinker check-kasm check-preproc check-olang
+.PHONY: all clean check check-link-script check-doc-refs check-alinker check-kasm check-preproc check-olang

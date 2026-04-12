@@ -12,10 +12,10 @@ This document describes the syntax accepted by `lexer.c` / `parser.c`.
 
 - One `.ol` file is one compilation unit; **no** import / module
 - Top-level elements:
-  - `extern fn` declaration or definition
-  - `let` global variables (optional `@data` / `@bss` / `@rodata` / `@section("name")` attributes)
+  - `extern Type Ident ( ParamList ) ;` or `extern Type Ident ( ParamList ) Block` (forward decl or exported definition)
+  - `Type Ident ( ParamList ) Block` (internal function; return type first)
+  - `let` globals: one or more `Ident < Type >`, then an **allocator** `@data<BITWIDTH>`, `@bss<BITWIDTH>`, `@rodata<BITWIDTH>`, `@section("name")<BITWIDTH>` (`BITWIDTH` is an integer literal, total size in bits; not `@stack`)
   - `type` type definitions
-  - `fn` internal function definitions
 - At least one function with body required
 - Entry: exported function named `main`, or last function with body
 
@@ -25,7 +25,7 @@ This document describes the syntax accepted by `lexer.c` / `parser.c`.
 - **Comment**: `//` to end of line
 - **Identifier**: `[A-Za-z_][A-Za-z0-9_]*` (max 63 characters)
 - **Keywords** (also reserved as type names where applicable):
-  - Control / decl: `extern`, `fn`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
+  - Control / decl: `extern`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
   - Ops: `cast`, `reinterpret`, `load`, `store`, `addr`, `deref`, `as`
   - Types / literals: `void`, `bool`, `ptr`, `true`, `false`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `f32`, `f64`, `b8`, `b16`, `b32`, `b64`
 - **Integer literal**: decimal, hex(`0x`), binary(`0b`), octal(`0o`), optional suffix `i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64`/`b8`/`b16`/`b32`/`b64`
@@ -54,13 +54,13 @@ Expr ::= Literal | Ident | Expr ( [Expr[,]]* ) | Expr . Ident | Expr [ Expr ]
        | load<Type>(Expr) | store<Type>(Expr, Expr) | addr Ident
 ```
 
-(`addr Ident` resolves a local name, then a global `let`, then an `extern` or `fn` symbol.)
+(`addr Ident` resolves a local name, then a global `let`, then an `extern` or function symbol.)
 
 ### Statements
 
 ```
 Stmt ::= Expr ;
-       | let Ident : Type [= Expr] ;
+       | let ( Ident < Type > )+ @stack < IntLit > ( [Expr] ) ;
        | Expr = Expr ;
        | { [Stmt]* }
        | if ( Expr ) Stmt [else Stmt]
@@ -71,14 +71,22 @@ Stmt ::= Expr ;
        | deref Ident as Type ;
 ```
 
+(`IntLit` is an integer literal: the **total bit width** after `@stack` / a global allocator.)
+
 ### Top-level Definitions
 
 ```
-TopLevel ::= extern fn Ident ( [ParamList] ) [-> Type] [ ; | Block ]
-           | fn Ident ( [ParamList] ) [-> Type] Block
+AllocatorG ::= @data < IntLit > ( [Expr] )
+             | @bss < IntLit > ( )
+             | @rodata < IntLit > ( Expr )
+             | @section ( StrLit ) < IntLit > ( [Expr] )
+
+TopLevel ::= extern Type Ident ( [ParamList] ) ;
+           | extern Type Ident ( [ParamList] ) Block
+           | Type Ident ( [ParamList] ) Block
            | type Ident = struct { [Field[,]]* } ;
            | type Ident = array < Type , Int > ;
-           | [ @Attr ]* let Ident : Type [= Expr] ;
+           | let ( Ident < Type > )+ AllocatorG ;
 
 ParamList ::= Param (, Param)*
 Param     ::= Ident : Type
@@ -88,8 +96,13 @@ Field     ::= Ident : Type
 ### Limitations
 
 - Up to 8 register parameters; additional parameters passed via stack
-- Scalar `let` must be initialized
+- Local `let`: repeat `Ident < Type >`, then `@stack<BITWIDTH>(...)` (`BITWIDTH` integer literal, total bits). Scalars need an initializer; aggregates may use empty `()`. Multiple names: scalars only. Global `let` is analogous: `(Ident < Type >)+` plus `@data|@bss|@rodata|@section(...)<BITWIDTH>(...)`. Multiple names: scalars only; a single binding may be an aggregate. The linker symbol is the **first** binding name.
 - No compound assignment operators
+
+### Values vs storage
+
+- `load`, `addr`, and literals act as **rvalues** (expression values). Only `let … @stack` / global allocators introduce **named** storage.
+- The current `codegen_x64.c` pipeline may still allocate stack slots for subexpressions; that is an implementation detail, not a language guarantee.
 
 ---
 

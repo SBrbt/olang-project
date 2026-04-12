@@ -1,5 +1,5 @@
-extern fn answer() -> i32;
+extern i32 answer();
 
-extern fn main() -> i32 {
+extern i32 main() {
   return answer();
 }

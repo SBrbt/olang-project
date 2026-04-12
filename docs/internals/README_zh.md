@@ -12,6 +12,7 @@
 |------|------|
 | 架构概览 | [architecture_zh.md](architecture_zh.md) |
 | 编译器实现 | [compiler_zh.md](compiler_zh.md) |
+| 编译器模块边界 | [compiler-modules_zh.md](compiler-modules_zh.md) |
 | 汇编器实现 | [assembler_zh.md](assembler_zh.md) |
 | 链接器实现 | [linker_zh.md](linker_zh.md) |
 | 对象格式 | [specs/oobj_zh.md](specs/oobj_zh.md) |

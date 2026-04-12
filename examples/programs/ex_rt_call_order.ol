@@ -1,9 +1,9 @@
-fn two() -> i64 { return 2i64; }
-fn three() -> i64 { return 3i64; }
-fn mul(a: i64, b: i64) -> i64 { return a * b; }
+i64 two() { return 2i64; }
+i64 three() { return 3i64; }
+i64 mul(a: i64, b: i64) { return a * b; }
 
-extern fn main() -> i32 {
-  let p: i64 = mul(two(), three());
+extern i32 main() {
+  let p<i64> @stack<64>(mul(two(), three()));
   if (p == 6i64) {
     return 0;
   }

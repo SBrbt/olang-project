@@ -24,7 +24,7 @@
 程序返回整数作为退出码：
 
 ```olang
-extern fn main() -> i32 {
+extern i32 main() {
     return 42;
 }
 ```
@@ -32,8 +32,8 @@ extern fn main() -> i32 {
 顶层元素：
 - `type` — 类型定义
 - `let` — 全局变量
-- `fn` — 内部函数（仅本文件）
-- `extern fn` — 导出函数（可链接）
+- `Ret name(...)` — 内部函数（仅本文件，返回类型 `Ret` 在前）
+- `extern Ret name(...)` — 导出或仅声明（可链接）
 
 ---
 
@@ -52,16 +52,25 @@ extern fn main() -> i32 {
 | `ptr` | 8字节 | 指针 |
 
 ```olang
-let x: i32 = 42i32;
-let y: i64 = 100i64;
-let z = 50;  // 默认 i32
+let x<i32> @stack<32>(42i32);
+let y<i64> @stack<64>(100i64);
+let z<i32> @stack<32>(50);  // 无后缀十进制字面量为 i32
+```
+
+#### 文件级 `let`（全局）
+
+函数外使用 `@data` / `@bss` / `@rodata` / `@section("…")` 等分配器，形式为「一个或多个 `名字 < 类型 >` + `@分配器<总位数>(…)`」，规则与函数体内的多绑定类似（总位数等于各类型位宽之和；多名字时仅标量）。详见 [语法参考](../book/syntax_zh.md) 中「变量绑定」与示例 `ex_rt_global_sections.ol`、`ex_rt_global_multi_view.ol`。
+
+```olang
+let gcount<i32> @data<32>(10);
+let glo_lo<i32> glo_hi<i32> @data<64>(0x0000000200000001u64);
 ```
 
 #### 聚合类型（可延后初始化）
 
 ```olang
 type Point = struct { x: i32, y: i32 };
-let p: Point;  // 无需立即初始化
+let p<Point> @stack<64>();  // 无需立即初始化
 p.x = 10i32;
 p.y = 20i32;
 ```
@@ -69,12 +78,12 @@ p.y = 20i32;
 #### 赋值与值拷贝
 
 ```olang
-let a: i32 = 0i32;
+let a<i32> @stack<32>(0i32);
 a = a + 1i32;  // 重新赋值
 
 type Pair = struct { a: i64, b: i64 };
-let x: Pair; x.a = 1i64; x.b = 2i64;
-let y: Pair;
+let x<Pair> @stack<128>(); x.a = 1i64; x.b = 2i64;
+let y<Pair> @stack<128>();
 y = x;         // 值拷贝！y 获得独立副本
 x.b = 9i64;    // 不影响 y
 ```
@@ -103,7 +112,7 @@ if (x < 0i32) {
 #### while
 
 ```olang
-let i: i32 = 0i32;
+let i<i32> @stack<32>(0i32);
 while (i < 10i32) {
     i = i + 1i32;
 }
@@ -124,17 +133,17 @@ while (true) {
 
 ```olang
 // 内部函数
-fn add(a: i32, b: i32) -> i32 {
+i32 add(a: i32, b: i32) {
     return a + b;
 }
 
 // 导出函数
-extern fn main() -> i32 {
+extern i32 main() {
     return add(3i32, 4i32);
 }
 
 // 声明外部函数
-extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
+extern i64 write(fd: i32, buf: ptr, count: u64);
 ```
 
 **限制**：最多 8 个寄存器参数；更多参数通过栈传递。
@@ -142,7 +151,7 @@ extern fn write(fd: i32, buf: ptr, count: u64) -> i64;
 #### 递归
 
 ```olang
-fn factorial(n: i32) -> i32 {
+i32 factorial(n: i32) {
     if (n <= 1i32) { return 1i32; }
     return n * factorial(n - 1i32);
 }
@@ -156,12 +165,12 @@ fn factorial(n: i32) -> i32 {
 type Point = struct { x: i32, y: i32 };
 type Rect = struct { tl: Point, br: Point };
 
-let r: Rect;
+let r<Rect> @stack<128>();
 r.tl.x = 0i32;  // 嵌套访问
 r.br.x = 10i32;
 
 // 聚合字段赋值（值拷贝）
-let p: Point; p.x = 1i32; p.y = 2i32;
+let p<Point> @stack<64>(); p.x = 1i32; p.y = 2i32;
 r.tl = p;  // 拷贝整个 Point
 ```
 
@@ -172,11 +181,11 @@ r.tl = p;  // 拷贝整个 Point
 ```olang
 type Int5 = array<i32, 5>;
 
-let arr: Int5;
+let arr<Int5> @stack<160>();
 arr[0] = 10i32;
 arr[1] = 20i32;
 
-fn sum(a: Int5) -> i32 {  // 传递指针
+i32 sum(a: Int5) {  // 传递指针
     return a[0] + a[1];
 }
 ```
@@ -189,15 +198,15 @@ fn sum(a: Int5) -> i32 {  // 传递指针
 
 ```olang
 // 取地址
-let x: i32 = 42i32;
-let p: ptr = addr x;
+let x<i32> @stack<32>(42i32);
+let p<ptr> @stack<64>(addr x);
 
 // 加载/存储
-let v: i32 = load<i32>(p);  // 读取
+let v<i32> @stack<32>(load<i32>(p));  // 读取
 store<i32>(p, 100i32);       // 写入
 
 // 字符串字面量
-let s: ptr = addr "Hello\n";
+let s<ptr> @stack<64>(addr "Hello\n");
 ```
 
 #### 系统调用示例
@@ -205,9 +214,9 @@ let s: ptr = addr "Hello\n";
 使用 kasm POSIX 封装层（`libposix.kasm`）提供的 `posix_write`：
 
 ```olang
-extern fn posix_write(fd: i64, buf: ptr, n: i64) -> i64;
+extern i64 posix_write(fd: i64, buf: ptr, n: i64);
 
-extern fn main() -> i32 {
+extern i32 main() {
     posix_write(1i64, "Hello from OLang!\n", 18i64);
     return 0;
 }
@@ -219,16 +228,16 @@ extern fn main() -> i32 {
 
 **lib.ol**：
 ```olang
-extern fn multiply(a: i32, b: i32) -> i32 {
+extern i32 multiply(a: i32, b: i32) {
     return a * b;
 }
 ```
 
 **main.ol**：
 ```olang
-extern fn multiply(a: i32, b: i32) -> i32;  // 声明
+extern i32 multiply(a: i32, b: i32);  // 声明
 
-extern fn main() -> i32 {
+extern i32 main() {
     return multiply(6i32, 7i32);
 }
 ```

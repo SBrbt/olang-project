@@ -24,6 +24,8 @@ olang/src/
     └── reloc/          # 重定位
 ```
 
+各层职责与拆分说明见 [compiler-modules_zh.md](compiler-modules_zh.md)。
+
 ### 前端
 
 #### 词法分析 (lexer.c)

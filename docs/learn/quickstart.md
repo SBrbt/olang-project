@@ -37,7 +37,7 @@ make check
 Create `hello.ol` in `examples/programs`:
 
 ```olang
-extern fn main() -> i32 {
+extern i32 main() {
     return 42;
 }
 ```
@@ -68,6 +68,6 @@ Ensure you're in project root, use: `bash examples/olc`
 
 **Q: "scalar needs initializer"?**
 ```olang
-let x: i32 = 0i32;  // ✓
-let y: i32;         // ✗ scalars must be initialized
+let x<i32> @stack<32>(0i32);  // ✓
+// let y<i32> @stack<32>();   // ✗ scalars must be initialized
 ```

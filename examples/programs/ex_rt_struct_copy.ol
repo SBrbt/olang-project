@@ -4,12 +4,12 @@ type Vec2 = struct {
   y: i64,
 };
 
-extern fn main() -> i32 {
-  let a: Vec2;
+extern i32 main() {
+  let a<Vec2> @stack<128>();
   a.x = 100i64;
   a.y = 200i64;
 
-  let b: Vec2;
+  let b<Vec2> @stack<128>();
   b = a;
 
   if (b.x != 100i64) { return 1; }

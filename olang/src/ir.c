@@ -130,9 +130,11 @@ const OlExternDecl *ol_program_get_extern(const OlProgram *p, const char *name) 
 }
 
 int ol_program_find_global(const OlProgram *p, const char *name) {
-  size_t i;
+  size_t i, j;
   for (i = 0; i < p->global_count; ++i) {
-    if (strcmp(p->globals[i].name, name) == 0) return (int)i;
+    for (j = 0; j < p->globals[i].binding_count; ++j) {
+      if (strcmp(p->globals[i].bindings[j].name, name) == 0) return (int)i;
+    }
   }
   return -1;
 }

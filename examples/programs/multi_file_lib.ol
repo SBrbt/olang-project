@@ -1,3 +1,3 @@
-extern fn answer() -> i32 {
+extern i32 answer() {
   return 42;
 }

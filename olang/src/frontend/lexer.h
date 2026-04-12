@@ -45,7 +45,6 @@ typedef enum OlTok {
   TOK_BANG,
   /* keywords */
   TOK_KW_EXTERN,
-  TOK_KW_FN,
   TOK_KW_LET,
   TOK_KW_IF,
   TOK_KW_ELSE,

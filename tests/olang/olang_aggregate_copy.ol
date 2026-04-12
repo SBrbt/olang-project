@@ -1,9 +1,9 @@
 // Test aggregate type value copy semantics
 type Pair = struct { a: i64, b: i64 };
 
-extern fn main() -> i32 {
-  let x: Pair;
-  let y: Pair;
+extern i32 main() {
+  let x<Pair> @stack<128>();
+  let y<Pair> @stack<128>();
   x.a = 1i64;
   x.b = 2i64;
   y = x;        // Value copy, not reference

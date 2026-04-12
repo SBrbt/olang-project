@@ -1,8 +1,8 @@
-fn bump() -> void {
+void bump() {
   return;
 }
 
-extern fn main() -> i32 {
+extern i32 main() {
   bump();
   return 0;
 }

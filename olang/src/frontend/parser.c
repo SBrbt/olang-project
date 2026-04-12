@@ -1,3 +1,9 @@
+/*
+ * Recursive-descent parser: tokens -> OlProgram and AST (functions, statements,
+ * expressions). Syntax and tree shape only; type rules and stack layout live
+ * in sema.c; machine code in backend/codegen_x64.c. See:
+ * docs/internals/compiler-modules.md
+ */
 #define _POSIX_C_SOURCE 200809L
 
 #include "parser.h"
@@ -18,6 +24,8 @@ typedef struct ParseCtx {
 
 static void free_expr(OlExpr *e);
 static void free_stmt(OlStmt *s);
+static int parse_let_bindings(ParseCtx *C, OlLetBinding *out, size_t *n_out);
+static int parse_let_allocator(ParseCtx *C, int allow_stack, OlAllocKind *alloc_out, uint32_t *bitwidth_out, OlExpr **init_out, char custom_sec[128]);
 
 static void errf(ParseCtx *C, const char *msg) {
   const char *m = msg;
@@ -70,6 +78,9 @@ static int is_builtin_type_tok(OlTok t) {
          t == TOK_KW_B8 || t == TOK_KW_B16 || t == TOK_KW_B32 || t == TOK_KW_B64 ||
          t == TOK_KW_PTR;
 }
+
+/* Top-level function: Ret name(...) — builtin, ptr, void, or typedef name (Ident). */
+static int is_type_start_tok(OlTok t) { return is_builtin_type_tok(t) || t == TOK_IDENT; }
 
 static int parse_type_ref(ParseCtx *C, OlTypeRef *out) {
   if (C->L->tok == TOK_KW_VOID) {
@@ -923,32 +934,23 @@ static OlStmt *parse_stmt(ParseCtx *C) {
     OlStmt *s = new_stmt(OL_ST_LET, line);
     if (!s) return NULL;
     if (!lex_next(C)) return NULL;
-    if (C->L->tok != TOK_IDENT) {
-      errf(C, "expected name in let");
+    if (!parse_let_bindings(C, s->u.let_.bindings, &s->u.let_.binding_count)) {
+      free_expr(s->u.let_.init);
       free(s);
       return NULL;
     }
-    snprintf(s->u.let_.name, sizeof(s->u.let_.name), "%s", C->L->ident);
-    if (!lex_next(C)) return NULL;
-    if (!expect(C, TOK_COLON)) {
+    if (!parse_let_allocator(C, 1, &s->u.let_.alloc, &s->u.let_.bitwidth, &s->u.let_.init, s->u.let_.custom_section)) {
+      free_expr(s->u.let_.init);
       free(s);
       return NULL;
     }
-    if (!parse_type_ref(C, &s->u.let_.ty)) {
+    if (s->u.let_.alloc != OL_ALLOC_STACK) {
+      errf(C, "local let must use @stack<bits>(...)");
+      free_expr(s->u.let_.init);
       free(s);
       return NULL;
     }
-    /* Optional initializer: scalar types require init, aggregate types don't */
-    if (C->L->tok == TOK_EQ) {
-      if (!lex_next(C)) return NULL;
-      s->u.let_.init = parse_expr(C);
-      if (!s->u.let_.init) {
-        free(s);
-        return NULL;
-      }
-    } else {
-      s->u.let_.init = NULL;
-    }
+    s->u.let_.custom_section[0] = '\0';
     if (!expect(C, TOK_SEMI)) {
       free_expr(s->u.let_.init);
       free(s);
@@ -1270,7 +1272,8 @@ static int parse_typedef(ParseCtx *C) {
   return 0;
 }
 
-static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out, OlParam **params_out, size_t *pc_out) {
+/* After return type: name ( param: type, ... ) */
+static int parse_fn_name_params(ParseCtx *C, char *name_out, OlParam **params_out, size_t *pc_out) {
   OlParam *params = NULL;
   size_t pc = 0, cap = 0;
   if (C->L->tok != TOK_IDENT) {
@@ -1278,7 +1281,7 @@ static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out,
     return 0;
   }
   snprintf(name_out, 128, "%s", C->L->ident);
-    if (!lex_next(C)) return 0;
+  if (!lex_next(C)) return 0;
   if (!expect(C, TOK_LPAREN)) return 0;
   if (C->L->tok != TOK_RPAREN) {
     for (;;) {
@@ -1302,7 +1305,7 @@ static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out,
       np = &params[pc];
       memset(np, 0, sizeof(*np));
       snprintf(np->name, sizeof(np->name), "%s", C->L->ident);
-    if (!lex_next(C)) return 0;
+      if (!lex_next(C)) return 0;
       if (!expect(C, TOK_COLON)) {
         free(params);
         return 0;
@@ -1313,7 +1316,7 @@ static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out,
       }
       pc++;
       if (C->L->tok == TOK_COMMA) {
-    if (!lex_next(C)) return 0;
+        if (!lex_next(C)) return 0;
         continue;
       }
       break;
@@ -1323,43 +1326,144 @@ static int parse_fn_decl_header(ParseCtx *C, char *name_out, OlTypeRef *ret_out,
     free(params);
     return 0;
   }
-  ret_out->kind = OL_TY_VOID;
-  if (C->L->tok == TOK_MINUS) {
-    if (!lex_next(C)) return 0;
-    if (!expect(C, TOK_GT)) {
-      free(params);
-      return 0;
-    }
-    if (!parse_type_ref(C, ret_out)) {
-      free(params);
-      return 0;
-    }
-  }
   *params_out = params;
   *pc_out = pc;
   return 1;
 }
 
-static int parse_global_let(ParseCtx *C, OlGlobalSection sec, const char *custom_sec) {
-  OlGlobalDef g;
-  OlGlobalDef *ng;
-  memset(&g, 0, sizeof(g));
-  g.section = sec;
-  if (custom_sec && custom_sec[0]) snprintf(g.custom_section, sizeof(g.custom_section), "%s", custom_sec);
-  if (!expect(C, TOK_KW_LET)) return 0;
+static int parse_let_bindings(ParseCtx *C, OlLetBinding *out, size_t *n_out) {
+  *n_out = 0;
+  for (;;) {
+    if (C->L->tok == TOK_AT) {
+      if (*n_out == 0) {
+        errf(C, "expected name<type> before @ in let");
+        return 0;
+      }
+      return 1;
+    }
+    if (*n_out >= OL_MAX_LET_BINDINGS) {
+      errf(C, "too many let bindings");
+      return 0;
+    }
+    if (C->L->tok != TOK_IDENT) {
+      errf(C, "expected name in let");
+      return 0;
+    }
+    snprintf(out[*n_out].name, sizeof(out[*n_out].name), "%s", C->L->ident);
+    if (!lex_next(C)) return 0;
+    if (!expect(C, TOK_LT)) return 0;
+    if (!parse_type_ref(C, &out[*n_out].ty)) return 0;
+    if (!expect(C, TOK_GT)) return 0;
+    (*n_out)++;
+  }
+}
+
+/* @stack / @data / @bss / @rodata / @section("name") then <BITWIDTH bits> then ( [expr] ) */
+static int parse_let_allocator(ParseCtx *C, int allow_stack, OlAllocKind *alloc_out, uint32_t *bitwidth_out, OlExpr **init_out, char custom_sec[128]) {
+  memset(custom_sec, 0, 128);
+  *init_out = NULL;
+  *alloc_out = OL_ALLOC_NONE;
+  if (!expect(C, TOK_AT)) return 0;
   if (C->L->tok != TOK_IDENT) {
-    errf(C, "global name");
+    errf(C, "expected allocator name after @");
     return 0;
   }
-  snprintf(g.name, sizeof(g.name), "%s", C->L->ident);
+  {
+    char kw[128];
+    snprintf(kw, sizeof(kw), "%s", C->L->ident);
     if (!lex_next(C)) return 0;
-  if (!expect(C, TOK_COLON)) return 0;
-  if (!parse_type_ref(C, &g.ty)) return 0;
-  g.init = NULL;
-  if (C->L->tok == TOK_EQ) {
+    if (strcmp(kw, "section") == 0) {
+      if (!expect(C, TOK_LPAREN)) return 0;
+      if (C->L->tok != TOK_STR) {
+        errf(C, "@section(\"name\") expected");
+        return 0;
+      }
+      snprintf(custom_sec, 128, "%s", C->L->str_val);
+      if (!lex_next(C)) return 0;
+      if (!expect(C, TOK_RPAREN)) return 0;
+      *alloc_out = OL_ALLOC_CUSTOM;
+    } else if (strcmp(kw, "stack") == 0) {
+      if (!allow_stack) {
+        errf(C, "@stack is only allowed inside functions");
+        return 0;
+      }
+      *alloc_out = OL_ALLOC_STACK;
+    } else if (strcmp(kw, "data") == 0) {
+      *alloc_out = OL_ALLOC_DATA;
+    } else if (strcmp(kw, "bss") == 0) {
+      *alloc_out = OL_ALLOC_BSS;
+    } else if (strcmp(kw, "rodata") == 0) {
+      *alloc_out = OL_ALLOC_RODATA;
+    } else {
+      errf(C, "unknown allocator after @");
+      return 0;
+    }
+  }
+  if (!expect(C, TOK_LT)) return 0;
+  if (C->L->tok != TOK_INT) {
+    errf(C, "expected integer bit width in < > after allocator");
+    return 0;
+  }
+  if (C->L->int_val <= 0 || C->L->int_val > 0x7fffffffLL) {
+    errf(C, "invalid bit width");
+    return 0;
+  }
+  *bitwidth_out = (uint32_t)C->L->int_val;
+  if (!lex_next(C)) return 0;
+  if (!expect(C, TOK_GT)) return 0;
+  if (!expect(C, TOK_LPAREN)) return 0;
+  if (C->L->tok == TOK_RPAREN) {
     if (!lex_next(C)) return 0;
-    g.init = parse_expr(C);
-    if (!g.init) return 0;
+  } else {
+    *init_out = parse_expr(C);
+    if (!*init_out) return 0;
+    if (!expect(C, TOK_RPAREN)) {
+      free_expr(*init_out);
+      *init_out = NULL;
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int parse_global_let(ParseCtx *C) {
+  OlGlobalDef g;
+  OlGlobalDef *ng;
+  OlAllocKind ak;
+  OlExpr *init = NULL;
+  char custom[128];
+  OlLetBinding binds[OL_MAX_LET_BINDINGS];
+  size_t nbind = 0;
+  memset(&g, 0, sizeof(g));
+  if (!expect(C, TOK_KW_LET)) return 0;
+  if (!parse_let_bindings(C, binds, &nbind)) return 0;
+  g.binding_count = nbind;
+  memcpy(g.bindings, binds, nbind * sizeof(OlLetBinding));
+  if (!parse_let_allocator(C, 0, &ak, &g.bitwidth, &init, custom)) return 0;
+  g.init = init;
+  if (ak == OL_ALLOC_STACK) {
+    errf(C, "@stack is only allowed inside functions");
+    free_expr(g.init);
+    return 0;
+  }
+  switch (ak) {
+    case OL_ALLOC_DATA:
+      g.section = OL_GSEC_DATA;
+      break;
+    case OL_ALLOC_BSS:
+      g.section = OL_GSEC_BSS;
+      break;
+    case OL_ALLOC_RODATA:
+      g.section = OL_GSEC_RODATA;
+      break;
+    case OL_ALLOC_CUSTOM:
+      g.section = OL_GSEC_CUSTOM;
+      snprintf(g.custom_section, sizeof(g.custom_section), "%s", custom);
+      break;
+    default:
+      errf(C, "invalid global allocator");
+      free_expr(g.init);
+      return 0;
   }
   if (!expect(C, TOK_SEMI)) {
     free_expr(g.init);
@@ -1377,43 +1481,6 @@ static int parse_global_let(ParseCtx *C, OlGlobalSection sec, const char *custom
   return 1;
 }
 
-static int parse_top_global(ParseCtx *C) {
-  OlGlobalSection sec = OL_GSEC_DEFAULT;
-  char custom[128] = "";
-  while (C->L->tok == TOK_AT) {
-    if (!lex_next(C)) return 0;
-    if (C->L->tok != TOK_IDENT) {
-      errf(C, "expected attribute name after @");
-      return 0;
-    }
-    if (strcmp(C->L->ident, "data") == 0) {
-      sec = OL_GSEC_DATA;
-    if (!lex_next(C)) return 0;
-    } else if (strcmp(C->L->ident, "bss") == 0) {
-      sec = OL_GSEC_BSS;
-    if (!lex_next(C)) return 0;
-    } else if (strcmp(C->L->ident, "rodata") == 0) {
-      sec = OL_GSEC_RODATA;
-    if (!lex_next(C)) return 0;
-    } else if (strcmp(C->L->ident, "section") == 0) {
-    if (!lex_next(C)) return 0;
-      if (!expect(C, TOK_LPAREN)) return 0;
-      if (C->L->tok != TOK_STR) {
-        errf(C, "@section(\"name\") expected");
-        return 0;
-      }
-      snprintf(custom, sizeof(custom), "%s", C->L->str_val);
-    if (!lex_next(C)) return 0;
-      if (!expect(C, TOK_RPAREN)) return 0;
-      sec = OL_GSEC_CUSTOM;
-    } else {
-      errf(C, "unknown @ attribute");
-      return 0;
-    }
-  }
-  return parse_global_let(C, sec, custom[0] ? custom : NULL);
-}
-
 static int parse_extern_item(ParseCtx *C) {
   OlExternDecl ex;
   OlExternDecl *ne;
@@ -1424,8 +1491,8 @@ static int parse_extern_item(ParseCtx *C) {
   OlTypeRef ret;
   char name[128];
   if (!expect(C, TOK_KW_EXTERN)) return 0;
-  if (!expect(C, TOK_KW_FN)) return 0;
-  if (!parse_fn_decl_header(C, name, &ret, &params, &pc)) return 0;
+  if (!parse_type_ref(C, &ret)) return 0;
+  if (!parse_fn_name_params(C, name, &params, &pc)) return 0;
   if (C->L->tok == TOK_SEMI) {
     memset(&ex, 0, sizeof(ex));
     snprintf(ex.name, sizeof(ex.name), "%s", name);
@@ -1468,18 +1535,23 @@ static int parse_extern_item(ParseCtx *C) {
     C->prog->func_count++;
     return 1;
   }
-  errf(C, "expected ; or { after extern fn header");
+  errf(C, "expected ; or { after extern declaration");
   free(params);
   return 0;
 }
 
-static int parse_fn(ParseCtx *C) {
+static int parse_top_level_internal_fn(ParseCtx *C) {
   OlFuncDef fn;
   OlFuncDef *nf;
   memset(&fn, 0, sizeof(fn));
-  if (!expect(C, TOK_KW_FN)) return 0;
-  if (!parse_fn_decl_header(C, fn.name, &fn.ret, &fn.params, &fn.param_count)) return 0;
+  if (!parse_type_ref(C, &fn.ret)) return 0;
+  if (!parse_fn_name_params(C, fn.name, &fn.params, &fn.param_count)) return 0;
   fn.is_export = 0;
+  if (C->L->tok != TOK_LBRACE) {
+    errf(C, "expected { after internal function parameters");
+    free(fn.params);
+    return 0;
+  }
   fn.body = parse_block(C);
   if (!fn.body) {
     free(fn.params);
@@ -1556,23 +1628,19 @@ int ol_parse_source_file(const char *path, OlProgram *out, char *err, size_t err
       if (!parse_extern_item(&C)) goto fail;
       continue;
     }
-    if (C.L->tok == TOK_AT) {
-      if (!parse_top_global(&C)) goto fail;
-      continue;
-    }
     if (C.L->tok == TOK_KW_LET) {
-      if (!parse_global_let(&C, OL_GSEC_DEFAULT, NULL)) goto fail;
+      if (!parse_global_let(&C)) goto fail;
       continue;
     }
     if (C.L->tok == TOK_KW_TYPE) {
       if (!parse_typedef(&C)) goto fail;
       continue;
     }
-    if (C.L->tok == TOK_KW_FN) {
-      if (!parse_fn(&C)) goto fail;
+    if (is_type_start_tok(C.L->tok)) {
+      if (!parse_top_level_internal_fn(&C)) goto fail;
       continue;
     }
-    errf(&C, "top-level expected extern fn, @attrs let, let, type, or fn");
+    errf(&C, "top-level expected extern, let, type, or Ret name(...)");
     goto fail;
   }
 
@@ -1600,7 +1668,7 @@ int ol_parse_source_file(const char *path, OlProgram *out, char *err, size_t err
     for (ei = 0; ei < out->func_count; ++ei) {
       if (strcmp(out->funcs[ei].name, out->entry_name) != 0) continue;
       if (!out->funcs[ei].is_export) {
-        snprintf(err, err_len, "entry function %s must be exported (use extern fn ... { })", out->entry_name);
+        snprintf(err, err_len, "entry function %s must be exported (use extern Ret %s() { })", out->entry_name, out->entry_name);
         ol_program_free(out);
         return 0;
       }

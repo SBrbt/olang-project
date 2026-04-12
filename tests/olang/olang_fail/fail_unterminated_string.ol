@@ -1,4 +1,4 @@
-fn main() i32 {
-  let x: *i8 = "unterminated;
+extern i32 main() {
+  let x<ptr> @stack<64>("unterminated);
   return 0i32;
 }

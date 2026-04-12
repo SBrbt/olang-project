@@ -24,6 +24,8 @@ olang/src/
     └── reloc/          # Relocations
 ```
 
+Layer responsibilities and refactoring notes: [compiler-modules.md](compiler-modules.md).
+
 ### Frontend
 
 #### Lexical Analysis (lexer.c)

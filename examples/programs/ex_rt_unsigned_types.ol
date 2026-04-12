@@ -1,11 +1,11 @@
-let flag: bool = true;
-let byte_val: u8 = 'A';
+let flag<bool> @data<8>(true);
+let byte_val<u8> @data<8>('A');
 
-extern fn main() -> i32 {
-  let q: u32 = 7u32 / 2u32;
-  let r: u32 = 7u32 % 2u32;
-  let big: u32 = 4294967295u32;
-  let ok: bool = big > 1u32;
+extern i32 main() {
+  let q<u32> @stack<32>(7u32 / 2u32);
+  let r<u32> @stack<32>(7u32 % 2u32);
+  let big<u32> @stack<32>(4294967295u32);
+  let ok<bool> @stack<8>(big > 1u32);
 
   if (flag && ok) {
     if (q == 3u32 && r == 1u32) {

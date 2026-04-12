@@ -108,11 +108,11 @@ High → low:
 ### Examples
 
 ```olang
-let i: i32 = (a + b) * c;
-let cmp: bool = (i > 0i32) && done;     // i32 compares; bool logic
+let i<i32> @stack<32>((a + b) * c);
+let cmp<bool> @stack<8>((i > 0i32) && done);     // i32 compares; bool logic
 
-let x: b32 = 0xFF00b32;
-let y: b32 = x & 0x00FFb32;             // bitwise only on b*
+let x<b32> @stack<32>(0xFF00b32);
+let y<b32> @stack<32>(x & 0x00FFb32);             // bitwise only on b*
 ```
 
 ---
