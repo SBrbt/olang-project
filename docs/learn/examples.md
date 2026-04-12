@@ -42,9 +42,10 @@ make check
 | `ex_rt_load_store_i32.ol` | `load`/`store` via `addr` (`i32`) |
 | `ex_rt_load_store_widths.ol` | `load`/`store` for `i8`, `i16`, `i64`, `u32` |
 | `ex_rt_ptr_eq.ol` | `ptr` `==` / `!=` |
-| `ex_rt_multi_view.ol` | Multi-binding on stack (several types, one blob) |
+| `ex_rt_multi_view.ol` | Stack multi-binding: `f32` + `i32` views, float vs int ops |
+| `ex_rt_u32_view.ol` | Same 4-byte slot: `i32` value read as `u32` via `<u32>addr` |
 | `ex_rt_global_sections.ol` | Globals and sections (`@data` / `@bss` / `@rodata`) |
-| `ex_rt_global_multi_view.ol` | File-scope multi-binding (same rules as stack) |
+| `ex_rt_global_multi_view.ol` | Global multi-binding: same `f32`/`i32` layout as `ex_rt_multi_view.ol` |
 | `ex_rt_section_custom.ol` | Custom global section name `@section("…")` |
 | `ex_rt_f16.ol` | `f16` literals and casts (combine with `f32` for arithmetic) |
 
@@ -73,7 +74,7 @@ make check
 |---------|-------------|
 | `ex_rt_binary_ops.ol` | `b32` shifts / bitwise / arithmetic |
 | `ex_rt_b16_b64.ol` | `b16` / `b64` |
-| `ex_rt_b8_bitwise.ol` | `b8` (avoid `0b8` token; use `reinterpret<b8>(0u8)` for zero) |
+| `ex_rt_b8_bitwise.ol` | `b8` (avoid `0b8` token; use `0b8` or `cast<b8>(0u8)` for zero) |
 
 #### Aggregate Types
 

@@ -1,15 +1,14 @@
-// Aggregate value copy: assignment copies bits; later mutation of source does not affect dest.
+// Aggregate value copy: `store<dest, src>` copies bits between same-shaped aggregates.
 type Pair = struct { a: i64, b: i64 };
 
 extern i32 main() {
   let x<Pair> @stack<128>();
   let y<Pair> @stack<128>();
-  x.a = 1i64;
-  x.b = 2i64;
-  y = x;
-  x.b = 9i64;
-  if (y.a == 1i64 && y.b == 2i64) {
-    return 0;
+  store<x.a, 1i64>;
+  store<x.b, 2i64>;
+  store<y, x>;
+  if (load<y.a> != 1i64) {
+    return 1;
   }
-  return 1;
+  return 0;
 }

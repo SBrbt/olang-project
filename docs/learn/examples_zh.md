@@ -42,9 +42,10 @@ make check
 | `ex_rt_load_store_i32.ol` | 经 `addr` 的 `load`/`store`（`i32`） |
 | `ex_rt_load_store_widths.ol` | `i8`、`i16`、`i64`、`u32` 的 `load`/`store` |
 | `ex_rt_ptr_eq.ol` | `ptr` 的 `==` / `!=` |
-| `ex_rt_multi_view.ol` | 栈上多绑定（多类型共享一块存储） |
+| `ex_rt_multi_view.ol` | 栈上多绑定：`f32` 与 `i32` 两种视图，分别做浮点与整数运算 |
+| `ex_rt_u32_view.ol` | 同 4 字节：`i32` 经 `<u32>addr` 当作 `u32` 读 |
 | `ex_rt_global_sections.ol` | 全局变量与各段（`@data` / `@bss` / `@rodata`） |
-| `ex_rt_global_multi_view.ol` | 文件级多绑定（与栈上多视图规则一致） |
+| `ex_rt_global_multi_view.ol` | 文件级多绑定：与 `ex_rt_multi_view.ol` 相同的 `f32`/`i32` 布局 |
 | `ex_rt_section_custom.ol` | 自定义全局段名 `@section("…")` |
 | `ex_rt_f16.ol` | `f16` 字面量与转换（与 `f32` 配合做算术） |
 
@@ -73,7 +74,7 @@ make check
 |------|------|
 | `ex_rt_binary_ops.ol` | `b32` 移位、位运算与算术 |
 | `ex_rt_b16_b64.ol` | `b16` / `b64` |
-| `ex_rt_b8_bitwise.ol` | `b8`（字面量零勿写 `0b8`，会与二进制前缀冲突；可用 `reinterpret<b8>(0u8)`） |
+| `ex_rt_b8_bitwise.ol` | `b8`（字面量零勿写 `0b8`，会与二进制前缀冲突；可用 `0b8` 或 `cast<b8>(0u8)`） |
 
 #### 聚合类型
 

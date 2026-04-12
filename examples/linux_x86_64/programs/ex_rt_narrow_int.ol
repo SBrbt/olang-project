@@ -7,12 +7,12 @@ extern i32 main() {
   let e<u16> @stack<16>(50000u16);
   let f<u16> @stack<16>(15000u16);
 
-  if (a + b == 52i8) {
-    if (a - b == 32i8) {
-      if (c + d == 1200i16) {
-        if (e - f == 35000u16) {
-          if (c > d) {
-            if (a >= b) {
+  if (load<a> + load<b> == 52i8) {
+    if (load<a> - load<b> == 32i8) {
+      if (load<c> + load<d> == 1200i16) {
+        if (load<e> - load<f> == 35000u16) {
+          if (load<c> > load<d>) {
+            if (load<a> >= load<b>) {
               return 0;
             }
           }

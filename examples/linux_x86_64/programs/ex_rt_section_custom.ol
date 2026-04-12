@@ -2,7 +2,7 @@
 let gsec<i32> @section(".ol_custom")<32>(42);
 
 extern i32 main() {
-  if (gsec != 42) {
+  if (load<gsec> != 42) {
     return 1;
   }
   return 0;

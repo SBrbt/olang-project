@@ -1,14 +1,14 @@
-// Lazy deref: `deref p as T` only binds; slot still holds ptr; reads/writes go through the pointer.
+// Indirect binding: find<…> with load<…> in the operand; inner must be ptr value; load/store use that view.
 let mutcell<i32> @data<32>(0);
 
 extern i32 main() {
   let p<ptr> @stack<64>(addr mutcell);
-  deref p as i32;
-  p = 5;
-  if (mutcell != 5) {
+  let pv<i32> <i32>(find<(load<p>)>);
+  store<pv, 5>;
+  if (load<mutcell> != 5i32) {
     return 1;
   }
-  if (p != 5) {
+  if (load<pv> != 5i32) {
     return 2;
   }
   return 0;

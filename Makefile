@@ -45,7 +45,7 @@ check: all check-link-script check-doc-refs check-alinker check-kasm check-prepr
 	@echo "OK: all checks passed"
 
 check-doc-refs:
-	python3 scripts/verify_doc_olang_refs.py
+	bash tests/verify_doc_olang_refs.sh
 
 check-preproc: $(BIN_DIR)/olprep
 	bash tests/preproc/include.sh

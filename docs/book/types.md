@@ -58,21 +58,23 @@ type IntArray = array<i32, 10>;
 
 #### `cast<DestType>(expr)`
 
-Explicit conversions the compiler allows between **different** types: widening/narrowing within the same integer family (`i*`↔`i*`, `u*`↔`u*`), `b*`↔`b*`, `f*`↔`f*`, `bool`↔integers, and float↔integer conversions. You cannot `cast` to the same type as the expression (use `reinterpret` for same-width rebinding).
+Explicit conversions the compiler allows between **different** types: widening/narrowing within the same integer family (`i*`↔`i*`, `u*`↔`u*`), `b*`↔`b*`, `f*`↔`f*`, `bool`↔integers, and float↔integer conversions. For **same-width** scalar rebinding of a **computed** value, `cast` is allowed (e.g. `cast<u32>(x + 1i32)`). You **cannot** apply `cast` to a **bare variable** for same-width rebinding—use **`let n<T> <T>addr x`** or multi-binding `let` (see below).
 
 ```olang
 cast<i32>(i64_value)   // narrow
 cast<i32>(i8_value)    // widen
 cast<u32>(200u8)       // unsigned widen
+cast<u32>(x + 0i32)    // same-width value cast (expression, not a plain variable)
 ```
 
-#### `reinterpret<DestType>(expr)`
+#### Same-width **storage** views: `addr` + `<T>`
 
-Rebinds the **same-sized** value as another type (e.g. `i32`↔`u32`, `u64`↔`ptr`, `b32`↔`i32`). Not allowed for `bool`, structs, or arrays.
+Use **`let n<T> <T>addr x`** to introduce another name as an indirect view of the same bytes (`addr` yields `ptr`, the outer `<T>` sets the element type). Alternatively, chain **`let`** before each `Ident<Type>` to share one allocation (e.g. `let x<f32> let n<i32> @stack<64>(...)`).
 
 ```olang
-reinterpret<u32>(-1i32)      // same 4 bytes, unsigned view
-reinterpret<ptr>(0x1000u64)  // integer to pointer (8-byte types)
+let x<i32> @stack<32>(-1);
+let u<u32> <u32>addr x;   // same 4 bytes as `x`, name `u`
+// cast<ptr>(0x1000u64)           // same-width value: literal / non-variable expr
 ```
 
 ### Type Categories

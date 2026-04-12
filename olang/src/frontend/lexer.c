@@ -42,14 +42,12 @@ static int kw_tok(const char *s) {
   if (strcmp(s, "type") == 0) return TOK_KW_TYPE;
   if (strcmp(s, "struct") == 0) return TOK_KW_STRUCT;
   if (strcmp(s, "array") == 0) return TOK_KW_ARRAY;
-  if (strcmp(s, "cast") == 0) return TOK_KW_CAST;
-  if (strcmp(s, "reinterpret") == 0) return TOK_KW_REINTERPRET;
   if (strcmp(s, "load") == 0) return TOK_KW_LOAD;
   if (strcmp(s, "store") == 0) return TOK_KW_STORE;
   if (strcmp(s, "addr") == 0) return TOK_KW_ADDR;
-  if (strcmp(s, "deref") == 0) return TOK_KW_DEREF;
+  if (strcmp(s, "find") == 0) return TOK_KW_FIND;
+  if (strcmp(s, "sizeof") == 0) return TOK_KW_SIZEOF;
   if (strcmp(s, "as") == 0) return TOK_KW_AS;
-  if (strcmp(s, "from") == 0) return TOK_KW_FROM;
   if (strcmp(s, "break") == 0) return TOK_KW_BREAK;
   if (strcmp(s, "continue") == 0) return TOK_KW_CONTINUE;
   if (strcmp(s, "true") == 0) return TOK_KW_TRUE;

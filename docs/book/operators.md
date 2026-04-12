@@ -4,7 +4,7 @@
 
 ---
 
-OLang is **strongly and statically typed**: for every binary operator, the left and right operands must have the **same** type. There are **no implicit numeric promotions** in expressions—use `cast` / `reinterpret` when you need a different type.
+OLang is **strongly and statically typed**: for every binary operator, the left and right operands must have the **same** type. There are **no implicit numeric promotions** in expressions—use `cast` (values) or `let n<T> <T>addr x` (same storage, new type) when you need a different type.
 
 The tables below list, **by type**, which operators are accepted by the compiler (`sema.c`).
 
@@ -33,7 +33,7 @@ Both operands must use the **same** integer type (e.g. two `i32`, not `i32` and 
 | `a < b`, `a > b`, `a <= b`, `a >= b` | Ordered comparison | `bool` |
 | `a == b`, `a != b` | Equality | `bool` |
 
-**Not available on integers:** `&`, `|`, `^`, `<<`, `>>` (those apply only to `b*` types). Use `b8`…`b64` if you need bitwise operations, or convert via `cast` / `reinterpret` after reading the rules in [types](types.md).
+**Not available on integers:** `&`, `|`, `^`, `<<`, `>>` (those apply only to `b*` types). Use `b8`…`b64` if you need bitwise operations, or convert via `cast` after reading the rules in [types](types.md).
 
 ---
 
@@ -80,7 +80,7 @@ Other binary operators are not defined for `ptr`.
 
 ### Aggregates (struct, array)
 
-Struct and array values are **not** “scalar” in the checker: you cannot use `==` / `!=` or arithmetic on them in expressions (assignment and field/index access use separate rules). Compare fields or use `reinterpret` / manual patterns if you need a scalar view.
+Struct and array values are **not** “scalar” in the checker: you cannot use `==` / `!=` or arithmetic on them in expressions. Writes use **`store<…>`** on an lvalue (including field and index paths). Compare fields or use field/index patterns if you need a scalar view.
 
 ---
 
@@ -89,7 +89,7 @@ Struct and array values are **not** “scalar” in the checker: you cannot use 
 High → low:
 
 ```
-() [] . addr cast reinterpret load  // highest
+() [] . addr cast find sizeof load <[T]>  // highest (includes ref forms)
 ! ~ -                               // unary
 * / %
 + -

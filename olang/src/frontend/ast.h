@@ -25,12 +25,14 @@ typedef enum OlTyKind {
   OL_TY_B32,
   OL_TY_B64,
   OL_TY_PTR,
-  OL_TY_ALIAS
+  OL_TY_ALIAS,
+  OL_TY_REF /* compile-time place: ref_inner is element type; void element = untyped location */
 } OlTyKind;
 
 typedef struct OlTypeRef {
   OlTyKind kind;
   char alias_name[128]; /* if OL_TY_ALIAS */
+  struct OlTypeRef *ref_inner; /* if OL_TY_REF: points to element type (single level) */
 } OlTypeRef;
 
 typedef struct OlParam {
@@ -52,6 +54,15 @@ typedef enum OlAddrKind {
   OL_ADDR_SYMBOL
 } OlAddrKind;
 
+typedef enum OlAllocKind {
+  OL_ALLOC_NONE = 0,
+  OL_ALLOC_STACK,
+  OL_ALLOC_DATA,
+  OL_ALLOC_BSS,
+  OL_ALLOC_RODATA,
+  OL_ALLOC_CUSTOM
+} OlAllocKind;
+
 typedef enum OlExprKind {
   OL_EX_INT = 1,
   OL_EX_FLOAT,
@@ -64,13 +75,15 @@ typedef enum OlExprKind {
   OL_EX_BNOT,
   OL_EX_BINARY,
   OL_EX_CALL,
-  OL_EX_CAST,
-  OL_EX_REINTERPRET,
+  OL_EX_CAST,       /* T<expr> — runtime conversion (expr or RefExpr in ref position); AST cast_. */
   OL_EX_ADDR,
-  OL_EX_LOAD,
-  OL_EX_STORE,
   OL_EX_FIELD,
-  OL_EX_INDEX
+  OL_EX_INDEX,
+  OL_EX_REF_BIND,   /* <T> inner — new typed reference; inner is ptr or untyped ref from find/@alloc */
+  OL_EX_FIND,       /* find<Expr> — untyped reference; inner must be ptr rvalue (E) */
+  OL_EX_LOAD,       /* load<Expr> — Expr must be typed reference; yields element value */
+  OL_EX_SIZEOF_TY,  /* sizeof<Type> */
+  OL_EX_ALLOC       /* @stack|@data|...<bits>(init) — untyped reference */
 } OlExprKind;
 
 typedef enum OlBinOp {
@@ -136,22 +149,9 @@ struct OlExpr {
       OlExpr *inner;
     } cast_;
     struct {
-      OlTypeRef to;
-      OlExpr *inner;
-    } reinterpret_;
-    struct {
       char name[128];
       OlAddrKind addr_kind; /* filled by sema */
     } addr;
-    struct {
-      OlTypeRef elem_ty;
-      OlExpr *ptr;
-    } load;
-    struct {
-      OlTypeRef elem_ty;
-      OlExpr *ptr;
-      OlExpr *val;
-    } store;
     struct {
       char base_ty[128];
       char field[128];
@@ -162,36 +162,48 @@ struct OlExpr {
       OlExpr *index_expr;
       OlExpr *arr;
     } index_;
+    struct {
+      OlTypeRef to; /* OL_TY_VOID: <void> — inner must yield ptr */
+      OlExpr *inner;
+    } ref_bind;
+    struct {
+      OlExpr *inner;
+    } find_;
+    struct {
+      OlExpr *inner;
+    } load_;
+    struct {
+      OlTypeRef ty;
+    } sizeof_ty;
+    struct {
+      OlAllocKind alloc;
+      int bitwidth_is_sizeof; /* 1: fold sizeof_bw_ty into bitwidth in sema */
+      OlTypeRef sizeof_bw_ty;
+      uint32_t bitwidth;
+      OlExpr *init;
+      char custom_section[128];
+    } alloc_;
   } u;
 };
-
-typedef enum OlAllocKind {
-  OL_ALLOC_NONE = 0,
-  OL_ALLOC_STACK,   /* let x<i32> @stack<32>(...) — locals only */
-  OL_ALLOC_DATA,
-  OL_ALLOC_BSS,
-  OL_ALLOC_RODATA,
-  OL_ALLOC_CUSTOM
-} OlAllocKind;
 
 #define OL_MAX_LET_BINDINGS 32
 
 typedef struct OlLetBinding {
   char name[128];
+  int has_ty; /* 0: name<> — invalid in let; parser may still accept */
   OlTypeRef ty;
 } OlLetBinding;
 
 typedef enum OlStmtKind {
   OL_ST_BLOCK = 1,
   OL_ST_LET,
-  OL_ST_ASSIGN,
+  OL_ST_STORE, /* store<lvalue, expr>; lvalue: name | field | index */
   OL_ST_IF,
   OL_ST_WHILE,
   OL_ST_RETURN,
   OL_ST_EXPR,
   OL_ST_BREAK,
-  OL_ST_CONTINUE,
-  OL_ST_DEREF
+  OL_ST_CONTINUE
 } OlStmtKind;
 
 typedef struct OlStmt OlStmt;
@@ -206,15 +218,12 @@ struct OlStmt {
     struct {
       OlLetBinding bindings[OL_MAX_LET_BINDINGS];
       size_t binding_count;
-      uint32_t bitwidth; /* total bits; sum of binding types must match */
-      OlAllocKind alloc;
-      OlExpr *init;
-      char custom_section[128];
+      OlExpr *ref_expr; /* after `from` */
     } let_;
     struct {
-      OlExpr *lhs;  /* Left value: can be VAR, INDEX, FIELD */
-      OlExpr *rhs;
-    } assign_;
+      OlExpr *target;
+      OlExpr *val;
+    } store_;
     struct {
       OlExpr *cond;
       OlStmt *then_arm;
@@ -228,21 +237,17 @@ struct OlStmt {
       OlExpr *val; /* NULL for void return */
     } ret;
     OlExpr *expr;
-    struct {
-      char bind[128];
-      OlTypeRef ty;
-    } deref;
   } u;
 };
 
 typedef struct OlFuncDef {
   char name[128];
-  char link_name[128]; /* sema: export => name; local fn => __ol_L_<cuhash>_name (unique per .ol) */
+  char link_name[128];
   OlTypeRef ret;
   OlParam *params;
   size_t param_count;
-  int is_export; /* 1: extern fn ... { } — global symbol uses link_name (= name); 0: fn — local symbol */
-  OlStmt *body; /* block */
+  int is_export;
+  OlStmt *body;
 } OlFuncDef;
 
 typedef enum OlGlobalSection {
@@ -256,10 +261,9 @@ typedef enum OlGlobalSection {
 typedef struct OlGlobalDef {
   OlLetBinding bindings[OL_MAX_LET_BINDINGS];
   size_t binding_count;
-  uint32_t bitwidth; /* sum of view sizes; linker symbol is bindings[0].name */
-  OlExpr *init; /* NULL => .bss (or zero .data if @data) */
+  OlExpr *ref_expr; /* file-scope: OL_EX_ALLOC */
   OlGlobalSection section;
-  char custom_section[128]; /* when section == OL_GSEC_CUSTOM, e.g. ".mydata" */
+  char custom_section[128];
 } OlGlobalDef;
 
 typedef struct OlStringLit {

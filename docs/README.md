@@ -30,7 +30,7 @@ Choose your path:
 | Compiler | [internals/compiler.md](internals/compiler.md) |
 | Assembler | [internals/assembler.md](internals/assembler.md) |
 | Linker | [internals/linker.md](internals/linker.md) |
-| Specifications | [internals/specs/](internals/specs/) |
+| Specifications | [internals/specs/](internals/specs/) (surface grammar: [olang-syntax.md](internals/specs/olang-syntax.md)) |
 
 ---
 

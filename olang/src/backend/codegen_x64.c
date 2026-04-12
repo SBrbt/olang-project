@@ -106,6 +106,8 @@ static uint32_t type_size_bytes(const OlProgram *p, const OlTypeRef *t) {
     case OL_TY_B64:
     case OL_TY_PTR:
       return 8u;
+    case OL_TY_REF:
+      return 8u;
     case OL_TY_ALIAS: {
       int k = ol_program_find_typedef(p, t->alias_name);
       if (k < 0) return 0;
@@ -361,6 +363,7 @@ static void emit_mov_eax_zext16_from_slot(CG *g, int slot) {
 
 static int cg_type_is_aggregate(CG *g, const OlTypeRef *t) {
   int ti;
+  if (t->kind == OL_TY_REF && t->ref_inner) t = t->ref_inner;
   if (t->kind != OL_TY_ALIAS) return 0;
   ti = ol_program_find_typedef(g->p, t->alias_name);
   if (ti < 0) return 0;
@@ -377,55 +380,6 @@ static void emit_mov_r64_rbp_disp(CG *g, int32_t d) {
     tx_copy(g, (uint8_t[]){rex, 0x8b, modrm32}, 3);
     tx_copy(g, (uint8_t *)&d, 4);
   }
-}
-
-static void emit_load_rax_from_rbp_disp_typed(CG *g, int32_t d, const OlTypeRef *ty) {
-  if (type_is_byte_like(ty)) {
-    if (d >= -128 && d <= 127)
-      tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x45, (uint8_t)(uint8_t)d}, 4);
-    else {
-      tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x85}, 3);
-      tx_copy(g, (uint8_t *)&d, 4);
-    }
-    return;
-  }
-  if (type_is_word_like(ty)) {
-    if (ty->kind == OL_TY_I16) {
-      if (d >= -128 && d <= 127)
-        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0x45, (uint8_t)(uint8_t)d}, 5);
-      else {
-        tx_copy(g, (uint8_t[]){0x48, 0x0f, 0xbf, 0x85}, 4);
-        tx_copy(g, (uint8_t *)&d, 4);
-      }
-    } else {
-      if (d >= -128 && d <= 127)
-        tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x45, (uint8_t)(uint8_t)d}, 4);
-      else {
-        tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x85}, 3);
-        tx_copy(g, (uint8_t *)&d, 4);
-      }
-    }
-    return;
-  }
-  if (type_is_i32_like(ty)) {
-    if (d >= -128 && d <= 127)
-      tx_copy(g, (uint8_t[]){0x48, 0x63, 0x45, (uint8_t)(uint8_t)d}, 4);
-    else {
-      tx_copy(g, (uint8_t[]){0x48, 0x63, 0x85}, 3);
-      tx_copy(g, (uint8_t *)&d, 4);
-    }
-    return;
-  }
-  if (type_is_u32_like(ty) || ty->kind == OL_TY_B32) {
-    if (d >= -128 && d <= 127)
-      tx_copy(g, (uint8_t[]){0x8b, 0x45, (uint8_t)(uint8_t)d}, 3);
-    else {
-      tx_copy(g, (uint8_t[]){0x8b, 0x85}, 2);
-      tx_copy(g, (uint8_t *)&d, 4);
-    }
-    return;
-  }
-  emit_mov_r64_rbp_disp(g, d);
 }
 
 static void emit_store_rax_to_rbp_disp_typed(CG *g, int32_t d, const OlTypeRef *ty) {
@@ -528,44 +482,6 @@ static void emit_lea_rax_rip(CG *g, const char *sym, int32_t addend) {
   if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "reloc oom");
 }
 
-static void emit_mov_from_global(CG *g, const char *sym, uint32_t sz, int32_t addend) {
-  size_t reloc_at;
-  if (sz == 1u) {
-    tx_copy(g, (uint8_t[]){0x0f, 0xb6, 0x05}, 3); /* movzx eax, byte [rip+d] */
-  } else if (sz == 2u) {
-    tx_copy(g, (uint8_t[]){0x0f, 0xb7, 0x05}, 3); /* movzx eax, word [rip+d] */
-  } else if (sz == 4u) {
-    tx_copy(g, (uint8_t[]){0x8b, 0x05}, 2); /* mov eax, [rip+d] */
-  } else if (sz == 8u) {
-    tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x05}, 3); /* mov rax, [rip+d] */
-  } else {
-    CG_FAIL(g, "global load size");
-    return;
-  }
-  reloc_at = g->tx_len;
-  tx_copy(g, (uint8_t[]){0, 0, 0, 0}, 4);
-  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "global load reloc");
-}
-
-static void emit_mov_to_global(CG *g, const char *sym, uint32_t sz, int32_t addend) {
-  size_t reloc_at;
-  if (sz == 1u) {
-    tx_copy(g, (uint8_t[]){0x88, 0x05}, 2); /* mov byte [rip+d], al */
-  } else if (sz == 2u) {
-    tx_copy(g, (uint8_t[]){0x66, 0x89, 0x05}, 3); /* mov word [rip+d], ax */
-  } else if (sz == 4u) {
-    tx_copy(g, (uint8_t[]){0x89, 0x05}, 2); /* mov dword [rip+d], eax */
-  } else if (sz == 8u) {
-    tx_copy(g, (uint8_t[]){0x48, 0x89, 0x05}, 3); /* mov qword [rip+d], rax */
-  } else {
-    CG_FAIL(g, "global store size");
-    return;
-  }
-  reloc_at = g->tx_len;
-  tx_copy(g, (uint8_t[]){0, 0, 0, 0}, 4);
-  if (!x64_add_pc32_reloc(g->obj, 0, reloc_at, sym, addend)) CG_FAIL(g, "global store reloc");
-}
-
 static void emit_call_sym(CG *g, const char *sym) {
   size_t reloc_at;
   txb(g, 0xe8);
@@ -632,14 +548,6 @@ static int find_local_loc(CG *g, const char *name) {
   return -1;
 }
 
-static OlTypeRef *lookup_local_ty(CG *g, const char *name) {
-  int i;
-  for (i = g->nloc - 1; i >= 0; --i) {
-    if (strcmp(g->loc[i].name, name) == 0) return &g->loc[i].ty;
-  }
-  return NULL;
-}
-
 static OlFuncDef *lookup_funcdef(CG *g, const char *name) {
   size_t i;
   for (i = 0; i < g->p->func_count; ++i) {
@@ -668,6 +576,25 @@ static int bind_local(CG *g, const char *name, int slot, const OlTypeRef *ty, ui
   }
   g->loc[g->nloc].indirect = 0u;
   g->loc[g->nloc].view_byte_off = view_byte_off;
+  g->nloc++;
+  return 1;
+}
+
+/* slot holds address; ty is element type for load/store (see sema indirect). */
+static int bind_local_indirect(CG *g, const char *name, int slot, const OlTypeRef *ty) {
+  if (g->nloc >= 256) {
+    CG_FAIL(g, "too many locals");
+    return 0;
+  }
+  snprintf(g->loc[g->nloc].name, sizeof(g->loc[g->nloc].name), "%s", name);
+  g->loc[g->nloc].slot = slot;
+  if (ty) {
+    g->loc[g->nloc].ty = *ty;
+  } else {
+    memset(&g->loc[g->nloc].ty, 0, sizeof(OlTypeRef));
+  }
+  g->loc[g->nloc].indirect = 1u;
+  g->loc[g->nloc].view_byte_off = 0u;
   g->nloc++;
   return 1;
 }
@@ -792,48 +719,14 @@ static int gen_expr(CG *g, OlExpr *e) {
     case OL_EX_VAR: {
       int sl = lookup_slot(g, e->u.var_name);
       int gi;
-      uint32_t gsz;
       int out;
       int li;
-      /* Indirect local: slot holds ptr; rvalue loads element into a new temp slot */
+      /* Named storage: yield address (reference), not loaded value */
       if (sl >= 0) {
         li = find_local_loc(g, e->u.var_name);
         if (li >= 0 && g->loc[li].indirect) {
-          OlTypeRef *elt = &g->loc[li].ty;
-          uint32_t esz = type_size_bytes(g->p, elt);
-          emit_mov_gpr_from_slot(g, 0, sl);
           out = alloc_slot(g);
-          if (type_is_float(elt)) {
-            int32_t dout = slot_disp(out);
-            if (elt->kind == OL_TY_F64) {
-              tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x00}, 4); /* movsd xmm0,[rax] */
-              if (dout >= -128 && dout <= 127)
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&dout, 4);
-              }
-            } else if (elt->kind == OL_TY_F32) {
-              tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x00}, 4);
-              if (dout >= -128 && dout <= 127)
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&dout, 4);
-              }
-            } else {
-              if (!emit_load_at_rax(g, 2u)) {
-                cg_err(g, "indirect f16 load");
-                return -1;
-              }
-              emit_mov_rbp_r64(g, out, 0);
-            }
-            return out;
-          }
-          if (!emit_load_at_rax(g, esz)) {
-            cg_err(g, "indirect load");
-            return -1;
-          }
+          emit_mov_gpr_from_slot(g, 0, sl);
           emit_mov_rbp_r64(g, out, 0);
           return out;
         }
@@ -845,58 +738,17 @@ static int gen_expr(CG *g, OlExpr *e) {
           if (cg_type_is_aggregate(g, lty)) {
             return sl;
           }
-          if (type_is_float(lty)) {
-            int32_t od;
-            out = alloc_slot(g);
-            od = slot_disp(out);
-            if (lty->kind == OL_TY_F64) {
-              if (d >= -128 && d <= 127)
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&d, 4);
-              }
-              if (od >= -128 && od <= 127)
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&od, 4);
-              }
-            } else if (lty->kind == OL_TY_F32) {
-              if (d >= -128 && d <= 127)
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)d}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&d, 4);
-              }
-              if (od >= -128 && od <= 127)
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)od}, 5);
-              else {
-                tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
-                tx_copy(g, (uint8_t *)&od, 4);
-              }
-            } else {
-              if (d >= -128 && d <= 127)
-                tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x45, (uint8_t)(int8_t)d}, 4);
-              else {
-                tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x85}, 3);
-                tx_copy(g, (uint8_t *)&d, 4);
-              }
-              if (!emit_load_at_rax(g, 2u)) {
-                cg_err(g, "f16 load");
-                return -1;
-              }
-              emit_mov_rbp_r64(g, out, 0);
-            }
-            return out;
-          }
           out = alloc_slot(g);
-          emit_load_rax_from_rbp_disp_typed(g, d, lty);
+          if (d >= -128 && d <= 127)
+            tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x45, (uint8_t)(int8_t)d}, 4);
+          else {
+            tx_copy(g, (uint8_t[]){0x48, 0x8d, 0x85}, 3);
+            tx_copy(g, (uint8_t *)&d, 4);
+          }
           emit_mov_rbp_r64(g, out, 0);
           return out;
         }
       }
-      /* Global variable: check if it's an aggregate type */
       {
         const OlTypeRef *gty = NULL;
         uint32_t goff = 0;
@@ -904,21 +756,11 @@ static int gen_expr(CG *g, OlExpr *e) {
         gi = ol_program_find_global(g->p, e->u.var_name);
         if (gi < 0) return -1;
         if (!cg_global_view(g, gi, e->u.var_name, &gty, &goff, &bsym)) return -1;
-        gsz = type_size_bytes(g->p, gty);
-        /* Aggregate type (>8 bytes): return address (lea), not load */
-        if (gsz > 8u) {
-          out = alloc_slot(g);
-          emit_lea_rax_rip(g, bsym, (int32_t)goff);
-          emit_mov_rbp_r64(g, out, 0);
-          return out;
-        }
-        /* Scalar type: load value from section */
-        emit_mov_from_global(g, bsym, gsz, (int32_t)goff);
+        out = alloc_slot(g);
+        emit_lea_rax_rip(g, bsym, (int32_t)goff);
+        emit_mov_rbp_r64(g, out, 0);
+        return out;
       }
-      if (g->failed) return -1;
-      out = alloc_slot(g);
-      emit_mov_rbp_r64(g, out, 0);
-      return out;
     }
     case OL_EX_BINARY: {
       int use_unsigned = type_is_unsigned_like(&e->u.binary.left->ty);
@@ -1138,10 +980,6 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_rbp_r64(g, out, 0);
       return out;
     }
-    case OL_EX_REINTERPRET: {
-      sl = gen_expr(g, e->u.reinterpret_.inner);
-      return sl;
-    }
     case OL_EX_CAST: {
       OlTyKind from_k = e->u.cast_.inner->ty.kind;
       OlTyKind to_k = e->ty.kind;
@@ -1343,11 +1181,66 @@ static int gen_expr(CG *g, OlExpr *e) {
       return -1;
     }
     case OL_EX_LOAD: {
-      int ps = gen_expr(g, e->u.load.ptr);
-      uint32_t sz = type_size_bytes(g->p, &e->u.load.elem_ty);
-      if (ps < 0) return -1;
-      emit_mov_r64_rbp(g, 0, ps);
-      if (!emit_load_at_rax(g, sz)) {
+      int as;
+      const OlTypeRef *elt;
+      uint32_t esz;
+      int out;
+      as = gen_expr(g, e->u.load_.inner);
+      if (as < 0) return -1;
+      if (e->u.load_.inner->ty.kind != OL_TY_REF || !e->u.load_.inner->ty.ref_inner) {
+        cg_err(g, "load codegen: inner not ref");
+        return -1;
+      }
+      elt = e->u.load_.inner->ty.ref_inner;
+      esz = type_size_bytes(g->p, elt);
+      emit_mov_gpr_from_slot(g, 0, as);
+      if (type_is_float(elt)) {
+        int32_t dout;
+        out = alloc_slot(g);
+        dout = slot_disp(out);
+        if (elt->kind == OL_TY_F64) {
+          tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x00}, 4);
+          if (dout >= -128 && dout <= 127)
+            tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
+          else {
+            tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x85}, 4);
+            tx_copy(g, (uint8_t *)&dout, 4);
+          }
+        } else if (elt->kind == OL_TY_F32) {
+          tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x00}, 4);
+          if (dout >= -128 && dout <= 127)
+            tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x45, (uint8_t)(int8_t)dout}, 5);
+          else {
+            tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x85}, 4);
+            tx_copy(g, (uint8_t *)&dout, 4);
+          }
+        } else {
+          if (!emit_load_at_rax(g, 2u)) return -1;
+          emit_mov_rbp_r64(g, out, 0);
+        }
+        return out;
+      }
+      if (cg_type_is_aggregate(g, elt) && esz > 8u) {
+        uint32_t nw = (esz + 7u) / 8u;
+        uint32_t w;
+        int base = alloc_slots(g, (int)nw);
+        int32_t ddst;
+        if (base < 0) return -1;
+        emit_mov_gpr_from_slot(g, 3, as);
+        for (w = 0; w < nw; w++) {
+          if (w > 0) tx_copy(g, (uint8_t[]){0x48, 0x83, 0xc3, 0x08}, 4);
+          tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x03}, 3);
+          ddst = slot_byte_disp(base, w * 8u);
+          if (ddst >= -128 && ddst <= 127)
+            tx_copy(g, (uint8_t[]){0x48, 0x89, 0x45, (uint8_t)(int8_t)ddst}, 4);
+          else {
+            tx_copy(g, (uint8_t[]){0x48, 0x89, 0x85}, 3);
+            tx_copy(g, (uint8_t *)&ddst, 4);
+          }
+        }
+        return base;
+      }
+      if (!emit_load_at_rax(g, esz)) {
         cg_err(g, "load size");
         return -1;
       }
@@ -1355,34 +1248,73 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_rbp_r64(g, out, 0);
       return out;
     }
-    case OL_EX_STORE: {
-      int ps = gen_expr(g, e->u.store.ptr);
-      int vs = gen_expr(g, e->u.store.val);
-      uint32_t sz = type_size_bytes(g->p, &e->u.store.elem_ty);
-      if (ps < 0 || vs < 0) return -1;
-      emit_mov_gpr_from_slot(g, 0, ps);
-      emit_mov_gpr_from_slot(g, 3, vs);
-      if (sz == 8)
-        tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3); /* mov [rax], rbx */
-      else if (sz == 4)
-        tx_copy(g, (uint8_t[]){0x89, 0x18}, 2); /* mov [rax], ebx */
-      else if (sz == 2)
-        tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3); /* mov word [rax], bx */
-      else if (sz == 1)
-        tx_copy(g, (uint8_t[]){0x88, 0x18}, 2); /* mov [rax], bl */
-      else {
-        cg_err(g, "store size");
+    case OL_EX_FIND: {
+      int s = gen_expr(g, e->u.find_.inner);
+      if (s < 0) return -1;
+      /* Inner is always a ptr rvalue (slot holds address bits). */
+      return s;
+    }
+    case OL_EX_REF_BIND: {
+      return gen_expr(g, e->u.ref_bind.inner);
+    }
+    case OL_EX_SIZEOF_TY: {
+      uint64_t bits = (uint64_t)type_size_bytes(g->p, &e->u.sizeof_ty.ty) * 8ull;
+      out = alloc_slot(g);
+      emit_mov_rax_imm64(g, (int64_t)bits);
+      emit_mov_rbp_r64(g, out, 0);
+      return out;
+    }
+    case OL_EX_ALLOC: {
+      uint32_t bw;
+      uint32_t blob_bytes;
+      int num_slots;
+      int base_slot;
+      int ptr_slot;
+      int32_t d;
+      uint8_t modrm;
+      uint8_t rex = 0x48;
+      if (e->u.alloc_.alloc != OL_ALLOC_STACK) {
+        cg_err(g, "only @stack allocation allowed in expression position");
         return -1;
       }
-      return vs;
+      bw = e->u.alloc_.bitwidth;
+      blob_bytes = (bw + 7u) / 8u;
+      num_slots = (int)((blob_bytes + 7u) / 8u);
+      base_slot = alloc_slots(g, num_slots);
+      if (base_slot < 0) return -1;
+      if (e->u.alloc_.init) {
+        int rs = gen_expr(g, e->u.alloc_.init);
+        if (rs < 0) return -1;
+        emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &e->u.alloc_.init->ty);
+      }
+      ptr_slot = alloc_slot(g);
+      if (ptr_slot < 0) return -1;
+      d = slot_disp(base_slot);
+      if (d >= -128 && d <= 127) {
+        modrm = (uint8_t)(0x45u | (0u << 3u));
+        tx_copy(g, (uint8_t[]){rex, 0x8d, modrm, (uint8_t)(int8_t)d}, 4);
+      } else {
+        modrm = (uint8_t)(0x85u | (0u << 3u));
+        tx_copy(g, (uint8_t[]){rex, 0x8d, modrm}, 3);
+        tx_copy(g, (uint8_t *)&d, 4);
+      }
+      emit_mov_rbp_r64(g, ptr_slot, 0);
+      return ptr_slot;
     }
     case OL_EX_FIELD: {
       int bi = gen_expr(g, e->u.field.obj);
-      OlTypeRef st = e->u.field.obj->ty;
-      const char *sname = st.alias_name;
-      int ti = ol_program_find_typedef(g->p, sname);
+      const char *sname;
+      int ti;
       size_t fi;
       uint32_t off = 0;
+      const OlTypeRef *f_elt;
+      if (bi < 0) return -1;
+      if (e->u.field.obj->ty.kind != OL_TY_REF || !e->u.field.obj->ty.ref_inner) {
+        cg_err(g, "field: expected struct reference");
+        return -1;
+      }
+      sname = e->u.field.obj->ty.ref_inner->alias_name;
+      ti = ol_program_find_typedef(g->p, sname);
       if (ti < 0) return -1;
       for (fi = 0; fi < g->p->typedefs[ti].field_count; ++fi) {
         if (strcmp(g->p->typedefs[ti].fields[fi].name, e->u.field.field) == 0) {
@@ -1390,30 +1322,14 @@ static int gen_expr(CG *g, OlExpr *e) {
           break;
         }
       }
-      if (bi < 0) return -1;
-      emit_mov_r64_rbp(g, 0, bi);
+      emit_mov_gpr_from_slot(g, 3, bi);
       if (off > 0) {
-        /* Stack grows down, so field at positive offset is at LOWER address */
-        /* Compute address = base - off */
-        emit_mov_gpr_from_slot(g, 3, bi);       /* rbx = base */
-        emit_mov_rax_imm64(g, (int64_t)off);    /* rax = off */
-        tx_copy(g, (uint8_t[]){0x48, 0x29, 0xc3}, 3); /* sub rbx, rax (rbx = base - off) */
-        tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3); /* mov rax, rbx */
+        emit_mov_rax_imm64(g, (int64_t)off);
+        tx_copy(g, (uint8_t[]){0x48, 0x29, 0xc3}, 3);
       }
-      {
-        uint32_t fsz = type_size_bytes(g->p, &e->ty);
-        /* For aggregate types (size > 8), return pointer to field */
-        /* For scalar types, load the value */
-        if (fsz > 8) {
-          /* Aggregate field: pointer is already in rax, just store it */
-        } else {
-          /* Scalar field: load value */
-          if (!emit_load_at_rax(g, fsz)) {
-            cg_err(g, "field load size");
-            return -1;
-          }
-        }
-      }
+      tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3);
+      f_elt = e->ty.ref_inner;
+      (void)f_elt;
       out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
       return out;
@@ -1478,19 +1394,7 @@ static int gen_expr(CG *g, OlExpr *e) {
       }
       tx_copy(g, (uint8_t[]){0x48, 0x01, 0xcb}, 3); /* add rbx, rcx */
       tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3); /* mov rax, rbx */
-      {
-        uint32_t ld = type_size_bytes(g->p, &e->ty);
-        /* Struct/array element: rax points at the element; keep address in slot (cf. aggregate OL_EX_VAR). */
-        if (cg_type_is_aggregate(g, &e->ty)) {
-          out = alloc_slot(g);
-          emit_mov_rbp_r64(g, out, 0);
-          return out;
-        }
-        if (!emit_load_at_rax(g, ld)) {
-          cg_err(g, "index load size");
-          return -1;
-        }
-      }
+      (void)e->ty.ref_inner;
       out = alloc_slot(g);
       emit_mov_rbp_r64(g, out, 0);
       return out;
@@ -1518,19 +1422,82 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         break;
       }
       case OL_ST_LET: {
-        uint32_t bw = s->u.let_.bitwidth;
-        uint32_t blob_bytes = (bw + 7u) / 8u;
-        int num_slots = (int)((blob_bytes + 7u) / 8u);
+        OlExpr *re = s->u.let_.ref_expr;
+        uint32_t bw;
+        uint32_t blob_bytes;
+        int num_slots;
         size_t bi;
         int is_aggregate = 0;
         int base_slot;
         int ptr_slot;
         OlTypeRef *t0;
         uint32_t let_sz;
-        if (s->u.let_.alloc != OL_ALLOC_STACK) {
+        OlExpr *init_e;
+        if (re && re->kind == OL_EX_REF_BIND) {
+          int fs;
+          if (s->u.let_.binding_count != 1u) {
+            cg_err(g, "let with <...>ref allows only one binding");
+            return 0;
+          }
+          fs = gen_expr(g, re->u.ref_bind.inner);
+          if (fs < 0) return 0;
+          if (!bind_local_indirect(g, s->u.let_.bindings[0].name, fs, &s->u.let_.bindings[0].ty)) return 0;
+          break;
+        }
+        if (re && re->kind == OL_EX_VAR) {
+          OlExpr *cur = re;
+          OlExpr *layers;
+          OlExpr rb;
+          size_t n = s->u.let_.binding_count;
+          size_t i;
+          size_t idx;
+          if (n < 1u) {
+            cg_err(g, "let ref-chain has no bindings");
+            return 0;
+          }
+          layers = (OlExpr *)calloc(n, sizeof(OlExpr));
+          if (!layers) {
+            cg_err(g, "oom");
+            return 0;
+          }
+          for (i = n; i > 0u; --i) {
+            int fs;
+            idx = i - 1u;
+            memset(&rb, 0, sizeof(rb));
+            rb.kind = OL_EX_REF_BIND;
+            rb.line = s->line;
+            memcpy(&rb.u.ref_bind.to, &s->u.let_.bindings[idx].ty, sizeof(OlTypeRef));
+            rb.u.ref_bind.inner = cur;
+            fs = gen_expr(g, &rb);
+            if (fs < 0) {
+              free(layers);
+              return 0;
+            }
+            if (!bind_local_indirect(g, s->u.let_.bindings[idx].name, fs, &s->u.let_.bindings[idx].ty)) {
+              free(layers);
+              return 0;
+            }
+            memset(&layers[idx], 0, sizeof(OlExpr));
+            layers[idx].kind = OL_EX_VAR;
+            layers[idx].line = s->line;
+            snprintf(layers[idx].u.var_name, sizeof(layers[idx].u.var_name), "%s", s->u.let_.bindings[idx].name);
+            cur = &layers[idx];
+          }
+          free(layers);
+          break;
+        }
+        if (!re || re->kind != OL_EX_ALLOC) {
+          cg_err(g, "local let requires @stack<bits>(...) or <[Type]>ref");
+          return 0;
+        }
+        if (re->u.alloc_.alloc != OL_ALLOC_STACK) {
           cg_err(g, "local let must be @stack");
           return 0;
         }
+        bw = re->u.alloc_.bitwidth;
+        init_e = re->u.alloc_.init;
+        blob_bytes = (bw + 7u) / 8u;
+        num_slots = (int)((blob_bytes + 7u) / 8u);
         if (s->u.let_.binding_count < 1u) {
           cg_err(g, "let has no bindings");
           return 0;
@@ -1567,16 +1534,21 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
               }
               emit_mov_rbp_r64(g, ptr_slot, 0);
             }
+            if (init_e) {
+              int rs = gen_expr(g, init_e);
+              if (rs < 0) return 0;
+              emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(data_slot, 0), &init_e->ty);
+            }
           }
           if (!bind_local(g, s->u.let_.bindings[0].name, ptr_slot, t0, 0u)) return 0;
           break;
         }
         base_slot = alloc_slots(g, num_slots);
         if (base_slot < 0) return 0;
-        if (s->u.let_.init) {
-          int rs = gen_expr(g, s->u.let_.init);
+        if (init_e) {
+          int rs = gen_expr(g, init_e);
           if (rs < 0) return 0;
-          emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &s->u.let_.init->ty);
+          emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &init_e->ty);
         }
         {
           uint32_t off = 0;
@@ -1588,313 +1560,88 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         }
         break;
       }
-      case OL_ST_ASSIGN: {
-        OlExpr *lhs = s->u.assign_.lhs;
-        int rs;
-        if (!lhs) { cg_err(g, "assign has no lhs"); return 0; }
-        rs = gen_expr(g, s->u.assign_.rhs);
-        if (rs < 0) return 0;
-        if (lhs->kind == OL_EX_VAR) {
-          /* Simple variable assignment */
-          int gi = ol_program_find_global(g->p, lhs->u.var_name);
-          int ls = lookup_slot(g, lhs->u.var_name);
-          uint32_t asz;
-          if (gi >= 0) {
-            const OlTypeRef *gty = NULL;
-            uint32_t goff = 0;
-            const char *bsym = NULL;
-            if (!cg_global_view(g, gi, lhs->u.var_name, &gty, &goff, &bsym)) return 0;
-            asz = type_size_bytes(g->p, gty);
-            emit_mov_r64_rbp(g, 0, rs);
-            emit_mov_to_global(g, bsym, asz, (int32_t)goff);
-            if (g->failed) return 0;
-            break;
-          }
-          if (ls < 0) return 0;
-          /* Check if this is an aggregate type assignment (struct/array) */
-          {
-            int is_aggregate = 0;
-            uint32_t agg_sz = 0;
-            OlTypeRef *target_ty = lookup_local_ty(g, lhs->u.var_name);
-            if (target_ty && target_ty->kind == OL_TY_ALIAS) {
-              int tdi = ol_program_find_typedef(g->p, target_ty->alias_name);
-              if (tdi >= 0) {
-                OlTypeDefKind tdk = g->p->typedefs[(size_t)tdi].kind;
-                if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-                  is_aggregate = 1;
-                  agg_sz = g->p->typedefs[(size_t)tdi].size_bytes;
-                }
-              }
-            }
-            if (is_aggregate && agg_sz > 0) {
-              /* Aggregate type: copy data word by word */
-              uint32_t num_words = (agg_sz + 7u) / 8u;
-              uint32_t w;
-              for (w = 0; w < num_words; w++) {
-                int32_t offset = -(int32_t)(w * 8);  /* Negative offset: field w is at start + offset */
-                /* Load source data pointer to rax */
-                emit_mov_gpr_from_slot(g, 0, rs);  /* rax = source data pointer (points to first field) */
-                /* Add offset to rax (offset is 0 or negative) */
-                if (offset != 0) {
-                  /* offset is negative, use sub for clarity (sub rax, -offset) */
-                  int32_t abs_offset = -offset;  /* Positive value to subtract */
-                  if (abs_offset >= -128 && abs_offset <= 127) {
-                    tx_copy(g, (uint8_t[]){0x48, 0x83, 0xe8, (uint8_t)(int8_t)abs_offset}, 4); /* sub rax, imm8 */
-                  } else {
-                    cg_err(g, "aggregate copy offset too large");
-                    return 0;
-                  }
-                }
-                /* Load word from [rax] to rdx */
-                tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x10}, 3); /* mov rdx, [rax] */
-                /* Load target data pointer to rax */
-                emit_mov_gpr_from_slot(g, 0, ls);  /* rax = target data pointer */
-                /* Add offset to rax */
-                if (offset != 0) {
-                  int32_t abs_offset = -offset;
-                  if (abs_offset >= -128 && abs_offset <= 127) {
-                    tx_copy(g, (uint8_t[]){0x48, 0x83, 0xe8, (uint8_t)(int8_t)abs_offset}, 4); /* sub rax, imm8 */
-                  } else {
-                    cg_err(g, "aggregate copy offset too large");
-                    return 0;
-                  }
-                }
-                /* Store word from rdx to [rax] */
-                tx_copy(g, (uint8_t[]){0x48, 0x89, 0x10}, 3); /* mov [rax], rdx */
-              }
-              break;
-            }
-          }
-          /* Indirect local: store rhs through pointer in slot */
-          {
-            int lidx = find_local_loc(g, lhs->u.var_name);
-            if (lidx >= 0 && g->loc[lidx].indirect) {
-              OlTypeRef *elt = &g->loc[lidx].ty;
-              uint32_t esz = type_size_bytes(g->p, elt);
-              emit_mov_gpr_from_slot(g, 0, ls);
-              if (type_is_float(elt)) {
-                int32_t drs = slot_disp(rs);
-                if (elt->kind == OL_TY_F64) {
-                  if (drs >= -128 && drs <= 127)
-                    tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
-                  else {
-                    tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
-                    tx_copy(g, (uint8_t *)&drs, 4);
-                  }
-                  tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x00}, 4);
-                } else if (elt->kind == OL_TY_F32) {
-                  if (drs >= -128 && drs <= 127)
-                    tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
-                  else {
-                    tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
-                    tx_copy(g, (uint8_t *)&drs, 4);
-                  }
-                  tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x00}, 4);
-                } else {
-                  emit_mov_gpr_from_slot(g, 3, rs);
-                  tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
-                }
-                break;
-              }
-              emit_mov_gpr_from_slot(g, 3, rs);
-              if (esz == 8u)
-                tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3);
-              else if (esz == 4u)
-                tx_copy(g, (uint8_t[]){0x89, 0x18}, 2);
-              else if (esz == 2u)
-                tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
-              else if (esz == 1u)
-                tx_copy(g, (uint8_t[]){0x88, 0x18}, 2);
-              else {
-                cg_err(g, "indirect store size");
-                return 0;
-              }
-              break;
-            }
-          }
-          /* Non-aggregate: scalar / ptr / shared view */
-          {
-            int lidx = find_local_loc(g, lhs->u.var_name);
-            OlTypeRef *lty = lookup_local_ty(g, lhs->u.var_name);
-            int32_t d;
-            if (lidx < 0 || !lty) {
-              cg_err(g, "assign to unknown local");
-              return 0;
-            }
-            d = slot_byte_disp(ls, g->loc[lidx].view_byte_off);
-            if (type_is_float(lty)) {
-              emit_copy_rs_slot_to_rbp_disp(g, rs, d, lty);
-            } else {
-              emit_mov_r64_rbp(g, 0, rs);
-              emit_store_rax_to_rbp_disp_typed(g, d, lty);
-            }
-          }
-          break;
-        } else if (lhs->kind == OL_EX_INDEX) {
-          /* Array index assignment: arr[idx] = value */
-          uint32_t esz = 8;
-          int ai, ii, li;
-          const char *arr_name = NULL;
-          /* Get array type info to determine element size */
-          if (lhs->u.index_.arr->kind == OL_EX_VAR) {
-            arr_name = lhs->u.index_.arr->u.var_name;
-            /* Try local variable first */
-            li = lookup_slot(g, arr_name);
-            if (li >= 0 && g->loc[li].ty.kind == OL_TY_ALIAS) {
-              int ti = ol_program_find_typedef(g->p, g->loc[li].ty.alias_name);
-              if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
-                const char *elem = g->p->typedefs[ti].elem_type;
-                if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
-                else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
-                else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
-              }
-            }
-            /* If not local, check global variable */
-            if (esz == 8) {
-              int gi = ol_program_find_global(g->p, arr_name);
-              if (gi >= 0) {
-                const OlTypeRef *gty = NULL;
-                uint32_t goff = 0;
-                const char *bsym = NULL;
-                if (!cg_global_view(g, gi, arr_name, &gty, &goff, &bsym)) return 0;
-                (void)goff;
-                (void)bsym;
-                {
-                  uint32_t gsz = type_size_bytes(g->p, gty);
-                  if (gsz > 8u) { /* Aggregate global (array/struct) */
-                    if (gty->kind == OL_TY_ALIAS) {
-                      int ti = ol_program_find_typedef(g->p, gty->alias_name);
-                      if (ti >= 0 && g->p->typedefs[ti].kind == OL_TYPEDEF_ARRAY) {
-                        const char *elem = g->p->typedefs[ti].elem_type;
-                        if (strcmp(elem, "i32") == 0 || strcmp(elem, "u32") == 0 || strcmp(elem, "f32") == 0 || strcmp(elem, "b32") == 0) esz = 4;
-                        else if (strcmp(elem, "u16") == 0 || strcmp(elem, "i16") == 0 || strcmp(elem, "f16") == 0 || strcmp(elem, "b16") == 0) esz = 2;
-                        else if (strcmp(elem, "u8") == 0 || strcmp(elem, "i8") == 0 || strcmp(elem, "bool") == 0 || strcmp(elem, "b8") == 0) esz = 1;
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-          /* Generate array base address and index */
-          ai = gen_expr(g, lhs->u.index_.arr);
-          if (ai < 0) return 0;
-          ii = gen_expr(g, lhs->u.index_.index_expr);
-          if (ii < 0) return 0;
-          /* arr base to rbx, index to rcx */
-          emit_mov_gpr_from_slot(g, 3, ai);  /* rbx = arr base */
-          emit_mov_gpr_from_slot(g, 1, ii);  /* rcx = index */
-          /* Scale index */
-          if (esz == 8) {
-            tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x03}, 4); /* shl rcx, 3 */
-          } else if (esz == 4) {
-            tx_copy(g, (uint8_t[]){0x48, 0xc1, 0xe1, 0x02}, 4); /* shl rcx, 2 */
-          } else if (esz == 2) {
-            tx_copy(g, (uint8_t[]){0x48, 0xd1, 0xe1}, 3); /* shl rcx, 1 */
-          }
-          /* Compute element address: rbx = rbx + rcx */
-          tx_copy(g, (uint8_t[]){0x48, 0x01, 0xcb}, 3); /* add rbx, rcx */
-          /* Store value: [rbx] = rax (value from rhs) */
-          emit_mov_r64_rbp(g, 0, rs);  /* rax = rhs value */
-          if (esz == 8) {
-            tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3); /* mov [rbx], rax */
-          } else if (esz == 4) {
-            tx_copy(g, (uint8_t[]){0x89, 0x03}, 2); /* mov [rbx], eax */
-          } else if (esz == 2) {
-            tx_copy(g, (uint8_t[]){0x66, 0x89, 0x03}, 3); /* mov word [rbx], ax */
-          } else if (esz == 1) {
-            tx_copy(g, (uint8_t[]){0x88, 0x03}, 2); /* mov [rbx], al */
-          }
-          break;
-        } else if (lhs->kind == OL_EX_FIELD) {
-          /* Struct field assignment: obj.field = value */
-          int bi;
-          OlTypeRef st;
-          const char *sname;
-          int ti;
-          size_t fi;
-          uint32_t off = 0;
-          uint32_t fsz = 8;
-          /* Get struct base address */
-          bi = gen_expr(g, lhs->u.field.obj);
-          if (bi < 0) return 0;
-          /* Calculate field offset */
-          st = lhs->u.field.obj->ty;
-          sname = st.alias_name;
-          ti = ol_program_find_typedef(g->p, sname);
-          if (ti < 0) return 0;
-          for (fi = 0; fi < g->p->typedefs[ti].field_count; ++fi) {
-            if (strcmp(g->p->typedefs[ti].fields[fi].name, lhs->u.field.field) == 0) {
-              off = g->p->typedefs[ti].fields[fi].offset;
-              break;
-            }
-          }
-          /* Get field size from the typedef info */
-          {
-            int fti = ol_program_find_typedef(g->p, sname);
-            if (fti >= 0) {
-              const char *ftype = g->p->typedefs[ti].fields[fi].type_name;
-              if (strcmp(ftype, "bool") == 0 || strcmp(ftype, "u8") == 0 || strcmp(ftype, "i8") == 0 || strcmp(ftype, "b8") == 0) fsz = 1;
-              else if (strcmp(ftype, "u16") == 0 || strcmp(ftype, "i16") == 0 || strcmp(ftype, "f16") == 0 || strcmp(ftype, "b16") == 0) fsz = 2;
-              else if (strcmp(ftype, "i32") == 0 || strcmp(ftype, "u32") == 0 || strcmp(ftype, "f32") == 0 || strcmp(ftype, "b32") == 0) fsz = 4;
-              else if (strcmp(ftype, "i64") == 0 || strcmp(ftype, "u64") == 0 || strcmp(ftype, "f64") == 0 || strcmp(ftype, "b64") == 0 || strcmp(ftype, "ptr") == 0) fsz = 8;
-              else {
-                /* Nested typedef - look up size */
-                int k = ol_program_find_typedef(g->p, ftype);
-                if (k >= 0) fsz = g->p->typedefs[k].size_bytes;
-                if (fsz == 0) fsz = 8;
-              }
-            }
-          }
-          /* Load struct base into rbx */
-          emit_mov_gpr_from_slot(g, 3, bi);  /* rbx = struct base */
-          /* If offset > 0, subtract it (stack grows down) */
-          if (off > 0) {
-            emit_mov_rax_imm64(g, (int64_t)off);
-            tx_copy(g, (uint8_t[]){0x48, 0x29, 0xc3}, 3); /* sub rbx, rax (rbx = base - off) */
-          }
-          /* For aggregate types (fsz > 8), copy data word by word */
-          /* For scalar types, load and store */
-          if (fsz > 8) {
-            uint32_t num_words = (fsz + 7u) / 8u;
-            uint32_t w;
-            /* rbx = target field address (already computed) */
-            /* Load source pointer to rcx */
-            emit_mov_gpr_from_slot(g, 1, rs);  /* rcx = source pointer */
-            for (w = 0; w < num_words; w++) {
-              int32_t neg_offset = -(int32_t)(w * 8);
-              /* Load from source: rax = [rcx + neg_offset] = [rcx - off8] */
-              if (w == 0) {
-                tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x01}, 3); /* mov rax, [rcx] */
-              } else {
-                tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x41, (uint8_t)(int8_t)neg_offset}, 4); /* mov rax, [rcx-off8] */
-              }
-              /* Store to target: [rbx + neg_offset] = rax = [rbx - off8] */
-              if (w == 0) {
-                tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3); /* mov [rbx], rax */
-              } else {
-                tx_copy(g, (uint8_t[]){0x48, 0x89, 0x43, (uint8_t)(int8_t)neg_offset}, 4); /* mov [rbx-off8], rax */
-              }
-            }
-          } else {
-            /* Scalar: load value into rax */
-            emit_mov_r64_rbp(g, 0, rs);  /* rax = rhs value */
-            /* Store value at [rbx] */
-            if (fsz == 8) {
-              tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3); /* mov [rbx], rax */
-            } else if (fsz == 4) {
-              tx_copy(g, (uint8_t[]){0x89, 0x03}, 2); /* mov [rbx], eax */
-            } else if (fsz == 2) {
-              tx_copy(g, (uint8_t[]){0x66, 0x89, 0x03}, 3); /* mov word [rbx], ax */
-            } else if (fsz == 1) {
-              tx_copy(g, (uint8_t[]){0x88, 0x03}, 2); /* mov [rbx], al */
-            }
-          }
-          break;
-        } else {
-          cg_err(g, "unsupported assign target");
+      case OL_ST_STORE: {
+        OlExpr *lhs = s->u.store_.target;
+        OlExpr *rhs = s->u.store_.val;
+        int rs = gen_expr(g, rhs);
+        int pd = gen_expr(g, lhs);
+        const OlTypeRef *elt;
+        uint32_t esz;
+        uint32_t nw;
+        uint32_t w;
+        if (rs < 0 || pd < 0) return 0;
+        if (lhs->ty.kind != OL_TY_REF || !lhs->ty.ref_inner) {
+          cg_err(g, "store codegen: lhs not ref");
           return 0;
         }
+        elt = lhs->ty.ref_inner;
+        esz = type_size_bytes(g->p, elt);
+        emit_mov_gpr_from_slot(g, 0, pd);
+        if (rhs->ty.kind == OL_TY_REF && rhs->ty.ref_inner &&
+            cg_type_is_aggregate(g, elt) &&
+            type_size_bytes(g->p, rhs->ty.ref_inner) == esz) {
+          emit_mov_gpr_from_slot(g, 3, rs);
+          nw = (esz + 7u) / 8u;
+          for (w = 0; w < nw; w++) {
+            if (w > 0) {
+              tx_copy(g, (uint8_t[]){0x48, 0x83, 0xc0, 0x08}, 4);
+              tx_copy(g, (uint8_t[]){0x48, 0x83, 0xc3, 0x08}, 4);
+            }
+            tx_copy(g, (uint8_t[]){0x48, 0x8b, 0x13}, 3);
+            tx_copy(g, (uint8_t[]){0x48, 0x89, 0x10}, 3);
+          }
+          break;
+        }
+        if (type_is_float(elt)) {
+          int32_t drs = slot_disp(rs);
+          if (elt->kind == OL_TY_F64) {
+            if (drs >= -128 && drs <= 127)
+              tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
+            else {
+              tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x10, 0x85}, 4);
+              tx_copy(g, (uint8_t *)&drs, 4);
+            }
+            tx_copy(g, (uint8_t[]){0xf2, 0x0f, 0x11, 0x00}, 4);
+          } else if (elt->kind == OL_TY_F32) {
+            if (drs >= -128 && drs <= 127)
+              tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x45, (uint8_t)(int8_t)drs}, 5);
+            else {
+              tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x10, 0x85}, 4);
+              tx_copy(g, (uint8_t *)&drs, 4);
+            }
+            tx_copy(g, (uint8_t[]){0xf3, 0x0f, 0x11, 0x00}, 4);
+          } else {
+            emit_mov_gpr_from_slot(g, 3, rs);
+            tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
+          }
+          break;
+        }
+        if (cg_type_is_aggregate(g, elt) && esz > 8u) {
+          nw = (esz + 7u) / 8u;
+          emit_mov_gpr_from_slot(g, 3, pd);
+          for (w = 0; w < nw; w++) {
+            int32_t srd = slot_byte_disp(rs, w * 8u);
+            emit_mov_r64_rbp_disp(g, srd);
+            tx_copy(g, (uint8_t[]){0x48, 0x89, 0x03}, 3);
+            if (w + 1u < nw)
+              tx_copy(g, (uint8_t[]){0x48, 0x83, 0xc3, 0x08}, 4);
+          }
+          break;
+        }
+        emit_mov_gpr_from_slot(g, 3, rs);
+        if (esz == 8u)
+          tx_copy(g, (uint8_t[]){0x48, 0x89, 0x18}, 3);
+        else if (esz == 4u)
+          tx_copy(g, (uint8_t[]){0x89, 0x18}, 2);
+        else if (esz == 2u)
+          tx_copy(g, (uint8_t[]){0x66, 0x89, 0x18}, 3);
+        else if (esz == 1u)
+          tx_copy(g, (uint8_t[]){0x88, 0x18}, 2);
+        else {
+          cg_err(g, "store scalar size");
+          return 0;
+        }
+        break;
       }
       case OL_ST_IF: {
         int sc, lelse, lend;
@@ -1974,18 +1721,6 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
       case OL_ST_EXPR:
         if (gen_expr(g, s->u.expr) < 0) return 0;
         break;
-      case OL_ST_DEREF: {
-        int li = find_local_loc(g, s->u.deref.bind);
-        uint32_t dsz = type_size_bytes(g->p, &s->u.deref.ty);
-        if (li < 0) return 0;
-        if (dsz != 1u && dsz != 2u && dsz != 4u && dsz != 8u) {
-          cg_err(g, "deref element size");
-          return 0;
-        }
-        g->loc[li].indirect = 1u;
-        g->loc[li].ty = s->u.deref.ty;
-        break;
-      }
       default:
         return 0;
     }
@@ -2086,6 +1821,18 @@ static size_t align_sz(size_t x, size_t al) {
   return (x + al - 1u) / al * al;
 }
 
+static OlExpr *cg_global_init(const OlGlobalDef *gd) {
+  if (!gd || !gd->ref_expr || gd->ref_expr->kind != OL_EX_ALLOC)
+    return NULL;
+  return gd->ref_expr->u.alloc_.init;
+}
+
+static uint32_t cg_global_bitwidth(const OlGlobalDef *gd) {
+  if (!gd || !gd->ref_expr || gd->ref_expr->kind != OL_EX_ALLOC)
+    return 0u;
+  return gd->ref_expr->u.alloc_.bitwidth;
+}
+
 static int cg_custom_sec_get(CG *g, const char *secname, char *err, size_t err_len) {
   size_t k;
   if (!secname || !secname[0]) {
@@ -2143,18 +1890,20 @@ static int emit_one_global_data_init(OlProgram *p, uint8_t **blob, size_t *blob_
   }
   *blob = nd;
   memset(*blob + *blob_len, 0, (size_t)sz);
-  if (!gd->init) {
-    snprintf(err, err_len, "writable global needs initializer");
-    return 0;
-  }
-  if (gd->init->kind == OL_EX_INT || gd->init->kind == OL_EX_BOOL || gd->init->kind == OL_EX_CHAR) {
+  {
+    OlExpr *ginit = cg_global_init(gd);
+    if (!ginit) {
+      snprintf(err, err_len, "writable global needs initializer");
+      return 0;
+    }
+  if (ginit->kind == OL_EX_INT || ginit->kind == OL_EX_BOOL || ginit->kind == OL_EX_CHAR) {
     uint64_t v = 0;
-    if (gd->init->kind == OL_EX_INT)
-      v = (uint64_t)gd->init->u.int_.int_val;
-    else if (gd->init->kind == OL_EX_BOOL)
-      v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
+    if (ginit->kind == OL_EX_INT)
+      v = (uint64_t)ginit->u.int_.int_val;
+    else if (ginit->kind == OL_EX_BOOL)
+      v = (uint64_t)(ginit->u.bool_val ? 1u : 0u);
     else
-      v = (uint64_t)gd->init->u.char_val;
+      v = (uint64_t)ginit->u.char_val;
     if (sz == 1u) (*blob)[*blob_len] = (uint8_t)v;
     else if (sz == 2u) {
       uint16_t u = (uint16_t)v;
@@ -2165,19 +1914,19 @@ static int emit_one_global_data_init(OlProgram *p, uint8_t **blob, size_t *blob_
     } else {
       memcpy(*blob + *blob_len, &v, 8);
     }
-  } else if (gd->init->kind == OL_EX_FLOAT) {
+  } else if (ginit->kind == OL_EX_FLOAT) {
     if (sz == 8u) {
-      double d = gd->init->u.float_.float_val;
+      double d = ginit->u.float_.float_val;
       memcpy(*blob + *blob_len, &d, 8);
     } else if (sz == 4u) {
-      float f = (float)gd->init->u.float_.float_val;
+      float f = (float)ginit->u.float_.float_val;
       memcpy(*blob + *blob_len, &f, 4);
     } else if (sz == 2u) {
-      uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val);
+      uint16_t h = f32_to_f16_bits((float)ginit->u.float_.float_val);
       memcpy(*blob + *blob_len, &h, 2);
     }
-  } else if (gd->init->kind == OL_EX_STR) {
-    OlStringLit *sl = &p->strings[gd->init->u.str_idx];
+  } else if (ginit->kind == OL_EX_STR) {
+    OlStringLit *sl = &p->strings[ginit->u.str_idx];
     if (*n_abs64 >= 64) {
       snprintf(err, err_len, "too many abs relocs");
       return 0;
@@ -2190,6 +1939,7 @@ static int emit_one_global_data_init(OlProgram *p, uint8_t **blob, size_t *blob_
     snprintf(err, err_len, "bad data global init");
     return 0;
   }
+  }
   *blob_len += (size_t)sz;
   *out_off = off;
   return 1;
@@ -2200,7 +1950,7 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
   for (i = 0; i < g->p->global_count; ++i) gl[i].kind = -1;
   for (i = 0; i < g->p->global_count; ++i) {
     OlGlobalDef *gd = &g->p->globals[i];
-    uint32_t sz = (gd->bitwidth + 7u) / 8u;
+    uint32_t sz = (cg_global_bitwidth(gd) + 7u) / 8u;
     size_t al = (sz >= 8u) ? 8u : ((sz >= 4u) ? 4u : 1u);
     int use_ro = 0, use_data = 0, use_bss = 0, use_custom = 0;
 
@@ -2213,12 +1963,13 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
     else if (gd->section == OL_GSEC_CUSTOM) {
       use_custom = 1;
     } else {
-      if (!gd->init)
+      OlExpr *gin = cg_global_init(gd);
+      if (!gin)
         use_bss = 1;
-      else if ((gd->init->kind == OL_EX_INT && gd->init->u.int_.int_val == 0) ||
-               (gd->init->kind == OL_EX_BOOL && gd->init->u.bool_val == 0) ||
-               (gd->init->kind == OL_EX_CHAR && gd->init->u.char_val == 0) ||
-               (gd->init->kind == OL_EX_FLOAT && gd->init->u.float_.float_val == 0.0))
+      else if ((gin->kind == OL_EX_INT && gin->u.int_.int_val == 0) ||
+               (gin->kind == OL_EX_BOOL && gin->u.bool_val == 0) ||
+               (gin->kind == OL_EX_CHAR && gin->u.char_val == 0) ||
+               (gin->kind == OL_EX_FLOAT && gin->u.float_.float_val == 0.0))
         use_bss = 1;
       else
         use_data = 1;
@@ -2265,24 +2016,30 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
       }
       g->ro = nr;
       memset(g->ro + g->ro_len, 0, (size_t)sz);
-      if (gd->init->kind == OL_EX_INT || gd->init->kind == OL_EX_BOOL || gd->init->kind == OL_EX_CHAR) {
+      {
+        OlExpr *gin = cg_global_init(gd);
+        if (!gin) {
+          snprintf(err, err_len, "rodata global needs initializer");
+          return 0;
+        }
+      if (gin->kind == OL_EX_INT || gin->kind == OL_EX_BOOL || gin->kind == OL_EX_CHAR) {
         uint64_t v = 0;
-        if (gd->init->kind == OL_EX_INT)
-          v = (uint64_t)gd->init->u.int_.int_val;
-        else if (gd->init->kind == OL_EX_BOOL)
-          v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
+        if (gin->kind == OL_EX_INT)
+          v = (uint64_t)gin->u.int_.int_val;
+        else if (gin->kind == OL_EX_BOOL)
+          v = (uint64_t)(gin->u.bool_val ? 1u : 0u);
         else
-          v = (uint64_t)gd->init->u.char_val;
+          v = (uint64_t)gin->u.char_val;
         if (sz == 1u) g->ro[g->ro_len] = (uint8_t)v;
         else if (sz == 2u) { uint16_t u = (uint16_t)v; memcpy(g->ro + g->ro_len, &u, 2); }
         else if (sz == 4u) { uint32_t u = (uint32_t)v; memcpy(g->ro + g->ro_len, &u, 4); }
         else { memcpy(g->ro + g->ro_len, &v, 8); }
-      } else if (gd->init->kind == OL_EX_FLOAT) {
-        if (sz == 8u) { double d = gd->init->u.float_.float_val; memcpy(g->ro + g->ro_len, &d, 8); }
-        else if (sz == 4u) { float f = (float)gd->init->u.float_.float_val; memcpy(g->ro + g->ro_len, &f, 4); }
-        else if (sz == 2u) { uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val); memcpy(g->ro + g->ro_len, &h, 2); }
-      } else if (gd->init->kind == OL_EX_STR) {
-        OlStringLit *sl = &g->p->strings[gd->init->u.str_idx];
+      } else if (gin->kind == OL_EX_FLOAT) {
+        if (sz == 8u) { double d = gin->u.float_.float_val; memcpy(g->ro + g->ro_len, &d, 8); }
+        else if (sz == 4u) { float f = (float)gin->u.float_.float_val; memcpy(g->ro + g->ro_len, &f, 4); }
+        else if (sz == 2u) { uint16_t h = f32_to_f16_bits((float)gin->u.float_.float_val); memcpy(g->ro + g->ro_len, &h, 2); }
+      } else if (gin->kind == OL_EX_STR) {
+        OlStringLit *sl = &g->p->strings[gin->u.str_idx];
         if (*n_abs64 >= 64) {
           snprintf(err, err_len, "too many abs relocs");
           return 0;
@@ -2294,6 +2051,7 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
       } else {
         snprintf(err, err_len, "bad rodata global init");
         return 0;
+      }
       }
       g->ro_len += (size_t)sz;
       gl[i].kind = 0;

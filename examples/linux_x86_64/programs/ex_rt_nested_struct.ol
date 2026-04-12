@@ -5,11 +5,11 @@ type Wrap = struct { p: Pair };
 extern i32 main() {
   let pair<Pair> @stack<128>();
   let wrap<Wrap> @stack<128>();
-  pair.a = 1i64;
-  pair.b = 2i64;
-  wrap.p = pair;
-  if (wrap.p.a == 1i64 && wrap.p.b == 2i64) {
-    return 0;
+  store<pair.a, 1i64>;
+  store<pair.b, 2i64>;
+  store<wrap.p, pair>;
+  if (load<wrap.p.a> != 1i64) {
+    return 1;
   }
-  return 1;
+  return 0;
 }

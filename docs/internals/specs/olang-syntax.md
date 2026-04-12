@@ -4,106 +4,111 @@
 
 ---
 
-> User documentation: [docs/book/syntax.md](../../book/syntax.md)
+> User guide: [docs/book/syntax.md](../../book/syntax.md) (maintained alongside the implementation)  
+> This file tracks what `lexer.c` / `parser.c` **currently** accept.
 
-This document describes the syntax accepted by `lexer.c` / `parser.c`.
+### Source file and top-level
 
-### Source File and Top-level
-
-- One `.ol` file is one compilation unit; **no** import / module
-- Top-level elements:
-  - `extern Type Ident ( ParamList ) ;` or `extern Type Ident ( ParamList ) Block` (forward decl or exported definition)
-  - `Type Ident ( ParamList ) Block` (internal function; return type first)
-  - `let` globals: one or more `Ident < Type >`, then an **allocator** `@data<BITWIDTH>`, `@bss<BITWIDTH>`, `@rodata<BITWIDTH>`, `@section("name")<BITWIDTH>` (`BITWIDTH` is an integer literal, total size in bits; not `@stack`)
-  - `type` type definitions
-- At least one function with body required
-- **`extern` definition** exports the function symbol; a top-level function **without** `extern` is internal to the compilation unit (not exported from the `.oobj`). The ELF process entry symbol is chosen only by the **link script** (`"entry"`, e.g. [`examples/linux_x86_64/link/linux_elf_exe.json`](../../examples/linux_x86_64/link/linux_elf_exe.json)), not by the compiler
+- One `.ol` file is one compilation unit; **no** import / module (`#include` is handled by `olprep`; see [preproc.md](../preproc.md)).
+- Top-level items:
+  - `extern Type Ident ( ParamList ) ;` or `extern Type Ident ( ParamList ) Block`
+  - `Type Ident ( ParamList ) Block` (internal function)
+  - Global `let`: **`let`** repeated per binding (see `LetBindings` below), then a **global** allocator `@data<…>`, `@bss<…>`, `@rodata<…>`, `@section("name")<…>` (**not** `@stack`)
+  - `type` definitions (`struct` / `array`)
+- At least one function with a body is required.
+- **`extern` definitions** export symbols; functions without `extern` are TU-local. ELF entry is chosen by the **link script**, not the compiler.
 
 ### Lexical
 
-- **Whitespace**: space, tab, newline
-- **Comment**: `//` to end of line
-- **Identifier**: `[A-Za-z_][A-Za-z0-9_]*` (max 63 characters)
-- **Keywords** (also reserved as type names where applicable):
+- **Whitespace**, **`//` comments**, **identifiers** (max 63 chars)
+- **Keywords**:
   - Control / decl: `extern`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
-  - Ops: `cast`, `reinterpret`, `load`, `store`, `addr`, `deref`, `as`
-  - Types / literals: `void`, `bool`, `ptr`, `true`, `false`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `f32`, `f64`, `b8`, `b16`, `b32`, `b64`
-- **Integer literal**: decimal, hex(`0x`), binary(`0b`), octal(`0o`), optional suffix `i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64`/`b8`/`b16`/`b32`/`b64`
-- **Float literal**: decimal with optional `.` fraction and/or `e`/`E` exponent; optional suffix `f16`/`f32`/`f64` (default type `f64` if unsuffixed)
-- **Boolean**: `true` / `false`
-- **Character**: `'x'`, supports `\\` `\'` `\n` `\r` `\t` `\0`
-- **String**: `"..."`, same escapes
+  - Ops: `cast`, `find`, `load`, `store`, `addr`, `sizeof`
+  - Types / literals: `void`, `bool`, `ptr`, `true`, `false`, `i8` … `b64` (see [syntax.md](../../book/syntax.md))
+  - **Reserved:** `as` (keyword in the lexer; no `as` syntax in the parser yet)
+- **Literals**: int / float / bool / char / string (same as user doc)
 
 ### Types
 
 ```
-Type ::= void | bool | ptr | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64
-       | f16 | f32 | f64 | b8 | b16 | b32 | b64 | Ident
+Type ::= void | bool | ptr | i8 | … | b64 | Ident
 ```
 
-### Expressions
+### Expressions (Expr)
+
+In `parse_expr`: `cast<T>(expr)` uses a full `expr`; also `sizeof<T>`, `load<Ident>`, `addr Ident`, **`find < Expr >`** (same form as in `RefExpr`; operand must be a `ptr` rvalue), literals, calls, field, index, unary/binary ops (see `parser.c`).
+
+### Reference expressions (RefExpr)
+
+Used as the tail of `let LetBindings` (`@…` or a `RefExpr`), and as the inner operand of `cast<T>(…)` **in ref position** (inner must be `RefExpr`, not any `expr`):
 
 ```
-Expr ::= Literal | Ident | Expr ( [Expr[,]]* ) | Expr . Ident | Expr [ Expr ]
-       | - Expr | ! Expr
-       | Expr + Expr | Expr - Expr | Expr * Expr | Expr / Expr | Expr % Expr
-       | Expr == Expr | Expr != Expr | Expr < Expr | Expr > Expr | Expr <= Expr | Expr >= Expr
-       | Expr && Expr | Expr || Expr
-       | Expr & Expr | Expr | Expr | Expr ^ Expr | Expr << Expr | Expr >> Expr
-       | cast<Type>(Expr) | reinterpret<Type>(Expr)
-       | load<Type>(Expr) | store<Type>(Expr, Expr) | addr Ident
+LetNameTy ::= Ident < Type >
+            | Ident < >
+
+LetBindings ::= LetNameTy ( let LetNameTy )*
+
+RefExpr ::= ( RefExpr )
+          | find < Expr >
+          | addr Ident
+          | @ stack | data | bss | rodata | section ( StrLit ) < BitWidth > ( Expr? )
+          | < [Type] > RefExpr
+          | cast < Type > ( RefExpr )
+          | Ident
+
+BitWidth ::= IntLit | sizeof < Type >
 ```
 
-(`addr Ident` resolves a local name, then a global `let`, then an `extern` or function symbol.)
+Plus the **`T<RefExpr>`** form where **`T`** is a builtin type keyword other than `void` (see `is_T_angle_conv_starter` in `parser.c`); it is parsed as part of `RefExpr`, not shown as a separate line above to avoid duplicating the keyword list.
+
+- Only `@stack` inside functions; no `@stack` at file scope.
+- `<void>` means no static type attached (inner must be a `ptr` view).
+- **`Ident`**: must resolve to **ref**-typed storage in sema (enables `let a<T> let b<U> rhsName` where `rhsName` is an existing reference).
+- **Builtin `Type` `<` `RefExpr` `>`**: same-angle closing rule as in `parse_ref_expr` (`is_T_angle_conv_starter`; `void` is excluded).
+- **`find < Expr >`**: `Expr` must have type **`ptr`** (a ptr rvalue); the result is a **compile-time reference to a memory object** (the usual lowering evaluates `Expr` in place). **`find<>`** is invalid. **Nesting `find<find<…>>`** is invalid. Inside `find<…>`, a comparison that uses **`>`** at the top level must parenthesize the comparison (e.g. `find<(a > b)>`) so the closing `>` of `find<…>` is not ambiguous.
 
 ### Statements
 
 ```
-Stmt ::= Expr ;
-       | let ( Ident < Type > )+ @stack < IntLit > ( [Expr] ) ;
-       | Expr = Expr ;
-       | { [Stmt]* }
-       | if ( Expr ) Stmt [else Stmt]
+Stmt ::= Block
+       | let LetBindings ( @stack < BitWidth > ( Expr? ) | RefExpr ) ;
+       | store < LValue , Expr > ;
+       | if ( Expr ) Stmt [ else Stmt ]
        | while ( Expr ) Stmt
        | break ;
        | continue ;
-       | return [Expr] ;
-       | deref Ident as Type ;
+       | return Expr? ;
+       | Expr ;
+
+LValue ::= Ident | Expr . Ident | Expr [ Expr ]
 ```
 
-(`IntLit` is an integer literal: the **total bit width** after `@stack` / a global allocator.)
+- **No** assignment statement **`Expr = Expr`**; use **`store<…>`** (see ref model).
+- **`let`**: `LetBindings` as above — **each** additional `Ident<Type>` is prefixed by **`let`** (legacy `let x<T> y<U>` without `let` between names is rejected). Then either `@stack<…>(…)` or a single `RefExpr`. No `from` keyword. Chaining order vs. nested ref-views: see [olang-refmodel.md](olang-refmodel.md) § “Chained `let`”.
+- **`store<…>`**: inside angle brackets: lvalue, comma, value expression, then `>`; value parsing uses a shallow expression layer (see `parse_shift`).
 
-### Top-level Definitions
+### Top-level (continued)
 
 ```
-AllocatorG ::= @data < IntLit > ( [Expr] )
-             | @bss < IntLit > ( )
-             | @rodata < IntLit > ( Expr )
-             | @section ( StrLit ) < IntLit > ( [Expr] )
+AllocatorG ::= @data < BitWidth > ( Expr? )
+             | @bss < BitWidth > ( )
+             | @rodata < BitWidth > ( Expr )
+             | @section ( StrLit ) < BitWidth > ( Expr? )
 
-TopLevel ::= extern Type Ident ( [ParamList] ) ;
-           | extern Type Ident ( [ParamList] ) Block
-           | Type Ident ( [ParamList] ) Block
-           | type Ident = struct { [Field[,]]* } ;
-           | type Ident = array < Type , Int > ;
-           | let ( Ident < Type > )+ AllocatorG ;
-
-ParamList ::= Param (, Param)*
-Param     ::= Ident : Type
-Field     ::= Ident : Type
+TopLevel ::= … | let LetBindings AllocatorG ;
 ```
 
 ### Limitations
 
-- Up to 8 register parameters; additional parameters passed via stack
-- Local `let`: repeat `Ident < Type >`, then `@stack<BITWIDTH>(...)` (`BITWIDTH` integer literal, total bits). Scalars need an initializer; aggregates may use empty `()`. Multiple names: scalars only. Global `let` is analogous: `(Ident < Type >)+` plus `@data|@bss|@rodata|@section(...)<BITWIDTH>(...)`. Multiple names: scalars only; a single binding may be an aggregate. The linker symbol is the **first** binding name.
-- No compound assignment operators
+- Up to 8 register parameters; rest on stack.
+- Multi-binding `let`, scalar vs aggregate, init rules: see [syntax.md](../../book/syntax.md).
+- No compound assignment; no `++`/`--`.
 
-### Values vs storage
+### Values and storage
 
-- `load`, `addr`, and literals act as **rvalues** (expression values). Only `let … @stack` / global allocators introduce **named** storage.
-- The current `codegen_x64.c` pipeline may still allocate stack slots for subexpressions; that is an implementation detail, not a language guarantee.
+- `load`, `addr`, literals are **values**. Named storage comes from `let` + allocators.
+- Spilling subexpressions to slots is an implementation detail.
 
 ---
 
-[Return](../README.md)
+[Back](../README.md)

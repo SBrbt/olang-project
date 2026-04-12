@@ -10,7 +10,7 @@
 make check
 ```
 
-Runs, in order: link-script unit test (`bin/link_script_test`), Markdown `.ol` link check (`python3 scripts/verify_doc_olang_refs.py`), alinker, kasm, preprocessor, then OLang integration (`examples/linux_x86_64/olc` over all `examples/linux_x86_64/programs/ex_*.ol`, multi-file link, plus expected-failure checks).
+Runs, in order: link-script unit test (`bin/link_script_test`), Markdown `.ol` link check (`bash tests/verify_doc_olang_refs.sh`), alinker, kasm, preprocessor, then OLang integration (`examples/linux_x86_64/olc` over all `examples/linux_x86_64/programs/ex_*.ol`, multi-file link, plus expected-failure checks).
 
 ### Quick subset (OLang + examples only)
 

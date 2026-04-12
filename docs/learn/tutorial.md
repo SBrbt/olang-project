@@ -57,43 +57,73 @@ let y<i64> @stack<64>(100i64);
 let z<i32> @stack<32>(50);  // unsuffixed decimal literal is i32
 ```
 
+#### Multi-binding on `@stack`
+
+You can declare **several names** on **one** stack blob: list `(Ident<Type>)+`, then `@stack<TOTAL_BITS>(initializer)` (no `from` keyword).
+
+- The **sum** of all bindings’ sizes (in bits) must equal `TOTAL_BITS`.
+- With **multiple names**, write **`let` before each `Ident<Type>`** (e.g. `let x<f32> let n<i32> @stack<64>(...)`). Each binding must be a **scalar** (not struct/array). Bindings may use **different** scalar types (e.g. `f32` and `i32` in one blob). One initializer expression supplies the bits (often a single integer literal whose pattern covers all slots).
+- Layout is a **tight pack** in declaration order (first field at the low-address end of the blob).
+
+```olang
+// Low 32 bits: 1.0f32; high 32 bits: 42i32 (little-endian u64 pattern)
+let x<f32> let n<i32> @stack<64>(0x0000002A3F800000u64);
+// float math on `x`, integer math on `n`; store<x, …> rewrites only the low half
+```
+
+See `ex_rt_multi_view.ol`.
+
 #### File-scope `let` (globals)
 
-Outside functions, use `@data` / `@bss` / `@rodata` / `@section("…")` allocators: one or more `Ident < Type >`, then `@allocator<TOTAL_BITS>(...)`. Rules mirror local multi-binding (total bits must match; multiple names are scalar-only). See [syntax reference](../book/syntax.md) (“Variable binding”) and `ex_rt_global_sections.ol`, `ex_rt_global_multi_view.ol`.
+Outside functions, use `@data`, `@bss`, `@rodata`, or `@section("…")` instead of `@stack`. The same multi-binding shape applies: `(Ident<Type>)+` then `@allocator<TOTAL_BITS>(...)`.
+
+- **`@data`** — writable `.data`, must have an initializer (unless your workflow uses only `@bss` / `@rodata` rules below).
+- **`@bss`** — writable `.bss`, **no** initializer (zero-filled at load time).
+- **`@rodata`** — read-only; initializer must be a constant.
+- **`@section("name")`** — place the blob in a custom section (link script must mention it if you rely on layout).
+
+When there are **several names** on one global blob, they behave like stack multi-binding: **only scalars**, total bits must match. When there is **a single** binding, it may be an **aggregate** (struct or array); the **first** name is the **linker symbol** for the whole object, other names are alternate views/offsets into it.
 
 ```olang
 let gcount<i32> @data<32>(10);
-let glo_lo<i32> glo_hi<i32> @data<64>(0x0000000200000001u64);
+let gx<f32> let gn<i32> @data<64>(0x0000002A3F800000u64);
 ```
+
+More examples: `ex_rt_global_sections.ol`, `ex_rt_global_multi_view.ol`, `ex_rt_section_custom.ol`. Full rules: [syntax reference](../book/syntax.md) (“Variable binding”).
 
 #### Aggregate Types (can defer initialization)
 
 ```olang
 type Point = struct { x: i32, y: i32 };
 let p<Point> @stack<64>();  // no immediate initialization needed
-p.x = 10i32;
-p.y = 20i32;
+store<p.x, 10i32>;
+store<p.y, 20i32>;
 ```
 
-#### Assignment and Value Copy
+#### Writes (`store`) and Value Copy
 
 ```olang
 let a<i32> @stack<32>(0i32);
-a = a + 1i32;  // reassignment
+store<a, a + 1i32>;  // update storage
 
 type Pair = struct { a: i64, b: i64 };
-let x<Pair> @stack<128>(); x.a = 1i64; x.b = 2i64;
+let x<Pair> @stack<128>();
+store<x.a, 1i64>;
+store<x.b, 2i64>;
 let y<Pair> @stack<128>();
-y = x;         // value copy! y gets independent copy
-x.b = 9i64;    // does not affect y
+store<y, x>;         // value copy: y gets an independent copy
+store<x.b, 9i64>;    // does not affect y
 ```
 
 #### Type Casting
 
 ```olang
 cast<i32>(value)              // explicit cast (allowed conversions only)
-reinterpret<ptr>(0x1000u64)   // same-sized rebind: u64 ↔ ptr, i32 ↔ u32, …
+cast<ptr>(0x1000u64)          // same-width value (literal / non-variable expr)
+let u<u32> <u32>addr x;         // another name, same bytes: wrap `addr` in `<T>` (or multi-bind in one let)
 ```
+
+Same-width view example: `ex_rt_u32_view.ol`.
 
 ---
 
@@ -114,7 +144,7 @@ if (x < 0i32) {
 ```olang
 let i<i32> @stack<32>(0i32);
 while (i < 10i32) {
-    i = i + 1i32;
+    store<i, i + 1i32>;
 }
 ```
 
@@ -166,12 +196,14 @@ type Point = struct { x: i32, y: i32 };
 type Rect = struct { tl: Point, br: Point };
 
 let r<Rect> @stack<128>();
-r.tl.x = 0i32;  // nested access
-r.br.x = 10i32;
+store<r.tl.x, 0i32>;  // nested field writes
+store<r.br.x, 10i32>;
 
-// Aggregate field assignment (value copy)
-let p<Point> @stack<64>(); p.x = 1i32; p.y = 2i32;
-r.tl = p;  // copies entire Point
+// Aggregate field writes (whole-struct value copy)
+let p<Point> @stack<64>();
+store<p.x, 1i32>;
+store<p.y, 2i32>;
+store<r.tl, p>;  // copies entire Point
 ```
 
 ---
@@ -182,8 +214,8 @@ r.tl = p;  // copies entire Point
 type Int5 = array<i32, 5>;
 
 let arr<Int5> @stack<160>();
-arr[0] = 10i32;
-arr[1] = 20i32;
+store<arr[0], 10i32>;
+store<arr[1], 20i32>;
 
 i32 sum(a: Int5) {  // passes pointer
     return a[0] + a[1];
@@ -201,9 +233,9 @@ i32 sum(a: Int5) {  // passes pointer
 let x<i32> @stack<32>(42i32);
 let p<ptr> @stack<64>(addr x);
 
-// Load/Store
-let v<i32> @stack<32>(load<i32>(p));  // read
-store<i32>(p, 100i32);       // write
+// After `find<p>`, load/store the binding name (same storage as `x`)
+let v<i32> <i32>(find<p>);
+store<v, 100i32>;
 
 // String literal
 let s<ptr> @stack<64>(addr "Hello\n");

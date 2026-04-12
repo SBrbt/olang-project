@@ -30,7 +30,7 @@
 | 编译器实现 | [internals/compiler_zh.md](internals/compiler_zh.md) |
 | 汇编器实现 | [internals/assembler_zh.md](internals/assembler_zh.md) |
 | 链接器实现 | [internals/linker_zh.md](internals/linker_zh.md) |
-| 规格文档 | [internals/specs/](internals/specs/) |
+| 规格文档 | [internals/specs/](internals/specs/)（语言表面语法见 [olang-syntax_zh.md](internals/specs/olang-syntax_zh.md)） |
 
 ---
 

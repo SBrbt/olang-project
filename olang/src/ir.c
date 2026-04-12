@@ -25,18 +25,20 @@ static void free_expr(OlExpr *e) {
     case OL_EX_CAST:
       free_expr(e->u.cast_.inner);
       break;
-    case OL_EX_REINTERPRET:
-      free_expr(e->u.reinterpret_.inner);
+    case OL_EX_REF_BIND:
+      free_expr(e->u.ref_bind.inner);
+      break;
+    case OL_EX_FIND:
+      free_expr(e->u.find_.inner);
+      break;
+    case OL_EX_LOAD:
+      free_expr(e->u.load_.inner);
+      break;
+    case OL_EX_ALLOC:
+      free_expr(e->u.alloc_.init);
       break;
     case OL_EX_BNOT:
       free_expr(e->u.bnot.inner);
-      break;
-    case OL_EX_LOAD:
-      free_expr(e->u.load.ptr);
-      break;
-    case OL_EX_STORE:
-      free_expr(e->u.store.ptr);
-      free_expr(e->u.store.val);
       break;
     case OL_EX_FIELD:
       free_expr(e->u.field.obj);
@@ -62,7 +64,11 @@ static void free_stmt(OlStmt *s) {
         break;
       }
       case OL_ST_LET:
-        free_expr(s->u.let_.init);
+        free_expr(s->u.let_.ref_expr);
+        break;
+      case OL_ST_STORE:
+        free_expr(s->u.store_.target);
+        free_expr(s->u.store_.val);
         break;
       case OL_ST_IF:
         free_expr(s->u.if_.cond);
@@ -78,10 +84,6 @@ static void free_stmt(OlStmt *s) {
         break;
       case OL_ST_EXPR:
         free_expr(s->u.expr);
-        break;
-      case OL_ST_ASSIGN:
-        free_expr(s->u.assign_.lhs);
-        free_expr(s->u.assign_.rhs);
         break;
       default:
         break;
@@ -101,7 +103,7 @@ void ol_program_free(OlProgram *p) {
   free(p->externs);
   for (i = 0; i < p->typedef_count; ++i) free(p->typedefs[i].fields);
   free(p->typedefs);
-  for (i = 0; i < p->global_count; ++i) free_expr(p->globals[i].init);
+  for (i = 0; i < p->global_count; ++i) free_expr(p->globals[i].ref_expr);
   free(p->globals);
   for (i = 0; i < p->func_count; ++i) {
     free(p->funcs[i].params);

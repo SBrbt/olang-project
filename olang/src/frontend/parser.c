@@ -20,12 +20,16 @@ typedef struct ParseCtx {
   OlLexer *L;
   char *err;
   size_t err_len;
+  /* Nesting depth of `...< expr >` (find/load/T<expr>/store<...>) angle operands; when >0, `>`/`>>`
+   * close angles instead of comparison/shift where the grammar requires it. */
+  int in_find_angle;
 } ParseCtx;
 
 static void free_expr(OlExpr *e);
 static void free_stmt(OlStmt *s);
-static int parse_let_bindings(ParseCtx *C, OlLetBinding *out, size_t *n_out);
-static int parse_let_allocator(ParseCtx *C, int allow_stack, OlAllocKind *alloc_out, uint32_t *bitwidth_out, OlExpr **init_out, char custom_sec[128]);
+static int parse_let_bindings_name_ty(ParseCtx *C, OlLetBinding *out, size_t *n_out);
+static OlExpr *parse_alloc_expr(ParseCtx *C, int allow_stack);
+static OlExpr *parse_ref_expr(ParseCtx *C, int allow_stack);
 
 static void errf(ParseCtx *C, const char *msg) {
   const char *m = msg;
@@ -68,6 +72,36 @@ static int expect(ParseCtx *C, OlTok t) {
     return 0;
   }
   return lex_next(C);
+}
+
+static int expect_angle_gt(ParseCtx *C) {
+  OlLexer *L = C->L;
+  if (L->tok == TOK_GT) {
+    /* Consume exactly one closing `>`. Do not skip a second `>` — that breaks `load<b> > x` (compare)
+     * when two `>` tokens are separate. Nested `find<load<p>>` uses `TOK_SHR` or a second call to
+     * expect_angle_gt for the outer `>`. */
+    if (!lex_next(C)) return 0;
+    return 1;
+  }
+  if (L->tok == TOK_SHR) {
+    /* `>>` lexed as one token; `pos` is past both. Step back one byte so `pos` is at the second
+     * `>`, set `tok` to GT. Inner `load<` is treated as closed by the first `>`; this token is the
+     * second `>` for the outer `find<` (caller will lex_next). Do not call ol_lexer_next here or the
+     * second `>` would be consumed before the outer expect_angle_gt. */
+    if (L->pos < 2u) {
+      errf(C, "unexpected token");
+      return 0;
+    }
+    if (L->src[L->pos - 2u] != '>' || L->src[L->pos - 1u] != '>') {
+      errf(C, "unexpected token");
+      return 0;
+    }
+    L->pos -= 1u;
+    L->tok = TOK_GT;
+    return 1;
+  }
+  errf(C, "unexpected token");
+  return 0;
 }
 
 static int is_builtin_type_tok(OlTok t) {
@@ -183,6 +217,37 @@ static int parse_type_ref(ParseCtx *C, OlTypeRef *out) {
   return 0;
 }
 
+/* Builtin type keyword -> OlTypeRef (no lexer advance). Used for T<expr> runtime conversion. */
+static int type_ref_from_conv_type_keyword(OlTok t, OlTypeRef *out) {
+  memset(out, 0, sizeof(*out));
+  switch (t) {
+    case TOK_KW_VOID: out->kind = OL_TY_VOID; return 1;
+    case TOK_KW_BOOL: out->kind = OL_TY_BOOL; return 1;
+    case TOK_KW_U8: out->kind = OL_TY_U8; return 1;
+    case TOK_KW_I8: out->kind = OL_TY_I8; return 1;
+    case TOK_KW_U16: out->kind = OL_TY_U16; return 1;
+    case TOK_KW_I16: out->kind = OL_TY_I16; return 1;
+    case TOK_KW_I32: out->kind = OL_TY_I32; return 1;
+    case TOK_KW_U32: out->kind = OL_TY_U32; return 1;
+    case TOK_KW_I64: out->kind = OL_TY_I64; return 1;
+    case TOK_KW_U64: out->kind = OL_TY_U64; return 1;
+    case TOK_KW_F16: out->kind = OL_TY_F16; return 1;
+    case TOK_KW_F32: out->kind = OL_TY_F32; return 1;
+    case TOK_KW_F64: out->kind = OL_TY_F64; return 1;
+    case TOK_KW_B8: out->kind = OL_TY_B8; return 1;
+    case TOK_KW_B16: out->kind = OL_TY_B16; return 1;
+    case TOK_KW_B32: out->kind = OL_TY_B32; return 1;
+    case TOK_KW_B64: out->kind = OL_TY_B64; return 1;
+    case TOK_KW_PTR: out->kind = OL_TY_PTR; return 1;
+    default: return 0;
+  }
+}
+
+/* T<expr> conversion: any builtin type keyword except void (void<E> is useless here). */
+static int is_T_angle_conv_starter(OlTok t) {
+  return is_builtin_type_tok(t) && t != TOK_KW_VOID;
+}
+
 static int parse_type_after_lt(ParseCtx *C, OlTypeRef *out) {
   if (!expect(C, TOK_LT)) return 0;
   if (!parse_type_ref(C, out)) return 0;
@@ -208,6 +273,8 @@ static size_t add_string(OlProgram *p, const uint8_t *data, size_t n) {
 }
 
 static OlExpr *parse_expr(ParseCtx *C);
+static OlExpr *parse_find_expr(ParseCtx *C);
+static OlExpr *parse_ref_bind_after_lt(ParseCtx *C, int line, int allow_stack);
 static OlExpr *parse_unary(ParseCtx *C);
 static OlExpr *parse_mul(ParseCtx *C);
 static OlExpr *parse_add(ParseCtx *C);
@@ -263,114 +330,87 @@ static OlExpr *parse_primary(ParseCtx *C) {
     }
     return inner;
   }
-  if (C->L->tok == TOK_KW_CAST) {
-    OlExpr *in;
+  if (is_T_angle_conv_starter(C->L->tok)) {
+    OlTok tykw = C->L->tok;
     OlExpr *e = new_expr(OL_EX_CAST, line);
+    OlExpr *inner;
     if (!e) return NULL;
     if (!lex_next(C)) return NULL;
-    if (!parse_type_after_lt(C, &e->u.cast_.to)) {
+    if (C->L->tok != TOK_LT) {
+      errf(C, "expected `<` after type in T<expr> conversion");
       free(e);
       return NULL;
     }
-    if (!expect(C, TOK_LPAREN)) {
+    if (!lex_next(C)) {
       free(e);
       return NULL;
     }
-    in = parse_expr(C);
-    if (!in) {
+    if (!type_ref_from_conv_type_keyword(tykw, &e->u.cast_.to)) {
       free(e);
       return NULL;
     }
-    e->u.cast_.inner = in;
-    if (!expect(C, TOK_RPAREN)) {
-      free_expr(e);
-      return NULL;
-    }
-    return e;
-  }
-  if (C->L->tok == TOK_KW_REINTERPRET) {
-    OlExpr *in;
-    OlExpr *e = new_expr(OL_EX_REINTERPRET, line);
-    if (!e) return NULL;
-    if (!lex_next(C)) return NULL;
-    if (!parse_type_after_lt(C, &e->u.reinterpret_.to)) {
+    if (C->L->tok == TOK_GT) {
+      errf(C, "expected expression in T<...>");
       free(e);
       return NULL;
     }
-    if (!expect(C, TOK_LPAREN)) {
+    C->in_find_angle++;
+    inner = parse_expr(C);
+    if (!inner) {
+      C->in_find_angle--;
       free(e);
       return NULL;
     }
-    in = parse_expr(C);
-    if (!in) {
+    if (!expect_angle_gt(C)) {
+      C->in_find_angle--;
+      free_expr(inner);
       free(e);
       return NULL;
     }
-    e->u.reinterpret_.inner = in;
-    if (!expect(C, TOK_RPAREN)) {
-      free_expr(e);
-      return NULL;
-    }
+    C->in_find_angle--;
+    e->u.cast_.inner = inner;
     return e;
   }
   if (C->L->tok == TOK_KW_LOAD) {
-    OlExpr *p;
     OlExpr *e = new_expr(OL_EX_LOAD, line);
+    OlExpr *inner;
     if (!e) return NULL;
     if (!lex_next(C)) return NULL;
-    if (!parse_type_after_lt(C, &e->u.load.elem_ty)) {
+    if (!expect(C, TOK_LT)) {
       free(e);
       return NULL;
     }
-    if (!expect(C, TOK_LPAREN)) {
+    if (C->L->tok == TOK_GT) {
+      errf(C, "expected expression in load<...>");
       free(e);
       return NULL;
     }
-    p = parse_expr(C);
-    if (!p) {
+    C->in_find_angle++;
+    inner = parse_expr(C);
+    if (!inner) {
+      C->in_find_angle--;
       free(e);
       return NULL;
     }
-    e->u.load.ptr = p;
-    if (!expect(C, TOK_RPAREN)) {
-      free_expr(e);
+    if (!expect_angle_gt(C)) {
+      C->in_find_angle--;
+      free_expr(inner);
+      free(e);
       return NULL;
     }
+    C->in_find_angle--;
+    e->u.load_.inner = inner;
     return e;
   }
-  if (C->L->tok == TOK_KW_STORE) {
-    OlExpr *ptr, *val;
-    OlExpr *e = new_expr(OL_EX_STORE, line);
+  if (C->L->tok == TOK_KW_FIND) {
+    return parse_find_expr(C);
+  }
+  if (C->L->tok == TOK_KW_SIZEOF) {
+    OlExpr *e = new_expr(OL_EX_SIZEOF_TY, line);
     if (!e) return NULL;
     if (!lex_next(C)) return NULL;
-    if (!parse_type_after_lt(C, &e->u.store.elem_ty)) {
+    if (!parse_type_after_lt(C, &e->u.sizeof_ty.ty)) {
       free(e);
-      return NULL;
-    }
-    if (!expect(C, TOK_LPAREN)) {
-      free(e);
-      return NULL;
-    }
-    ptr = parse_expr(C);
-    if (!ptr) {
-      free(e);
-      return NULL;
-    }
-    if (!expect(C, TOK_COMMA)) {
-      free_expr(ptr);
-      free(e);
-      return NULL;
-    }
-    val = parse_expr(C);
-    if (!val) {
-      free_expr(ptr);
-      free(e);
-      return NULL;
-    }
-    e->u.store.ptr = ptr;
-    e->u.store.val = val;
-    if (!expect(C, TOK_RPAREN)) {
-      free_expr(e);
       return NULL;
     }
     return e;
@@ -401,6 +441,10 @@ static OlExpr *parse_primary(ParseCtx *C) {
     e->u.char_val = C->L->char_val;
     if (!lex_next(C)) return NULL;
     return e;
+  }
+  if (C->L->tok == TOK_LT) {
+    if (!lex_next(C)) return NULL;
+    return parse_ref_bind_after_lt(C, line, 1);
   }
   errf(C, "expected expression");
   return NULL;
@@ -580,6 +624,9 @@ static OlExpr *parse_add_rest(ParseCtx *C, OlExpr *l) {
 
 static OlExpr *parse_shift_rest(ParseCtx *C, OlExpr *l) {
   while (C->L->tok == TOK_SHL || C->L->tok == TOK_SHR) {
+    /* Inside find/load<...>, `>>` lexes as SHR but may close nested `>><...>`; do not parse as
+     * shift (use parentheses for `p >> k` inside the angle, e.g. find<(p >> 1)>). */
+    if (C->in_find_angle > 0 && C->L->tok == TOK_SHR) break;
     OlBinOp op = (C->L->tok == TOK_SHL) ? OL_BIN_SHL : OL_BIN_SHR;
     int line = C->L->line;
     OlExpr *r, *p;
@@ -594,7 +641,38 @@ static OlExpr *parse_shift_rest(ParseCtx *C, OlExpr *l) {
   return l;
 }
 
+/* Inside find<...>, only LT/LE/GE participate in comparison here so a lone `>` can close the
+ * angle bracket (e.g. find<p>). Use parentheses for top-level `a > b` inside find<...>. */
+static OlExpr *parse_cmp_rest_find(ParseCtx *C, OlExpr *l) {
+  while (C->L->tok == TOK_LT || C->L->tok == TOK_LE || C->L->tok == TOK_GE) {
+    OlBinOp op = OL_BIN_LT;
+    int line = C->L->line;
+    if (C->L->tok == TOK_LE) op = OL_BIN_LE;
+    else if (C->L->tok == TOK_GE) op = OL_BIN_GE;
+    if (!lex_next(C)) return NULL;
+    {
+      OlExpr *r = parse_shift(C), *p;
+      if (!r) {
+        free_expr(l);
+        return NULL;
+      }
+      p = new_expr(OL_EX_BINARY, line);
+      if (!p) {
+        free_expr(l);
+        free_expr(r);
+        return NULL;
+      }
+      p->u.binary.op = op;
+      p->u.binary.left = l;
+      p->u.binary.right = r;
+      l = p;
+    }
+  }
+  return l;
+}
+
 static OlExpr *parse_cmp_rest(ParseCtx *C, OlExpr *l) {
+  if (C->in_find_angle > 0) return parse_cmp_rest_find(C, l);
   while (C->L->tok == TOK_LT || C->L->tok == TOK_GT || C->L->tok == TOK_LE || C->L->tok == TOK_GE) {
     OlBinOp op = OL_BIN_LT;
     int line = C->L->line;
@@ -715,32 +793,6 @@ static OlExpr *parse_or_rest(ParseCtx *C, OlExpr *l) {
   return l;
 }
 
-static OlExpr *parse_expr_from_atom(ParseCtx *C, OlExpr *atom) {
-  OlExpr *e;
-  if (!atom) return NULL;
-  e = parse_postfix_chain(C, atom);
-  if (!e) return NULL;
-  e = parse_mul_rest(C, e);
-  if (!e) return NULL;
-  e = parse_add_rest(C, e);
-  if (!e) return NULL;
-  e = parse_shift_rest(C, e);
-  if (!e) return NULL;
-  e = parse_cmp_rest(C, e);
-  if (!e) return NULL;
-  e = parse_eq_rest(C, e);
-  if (!e) return NULL;
-  e = parse_bitand_rest(C, e);
-  if (!e) return NULL;
-  e = parse_bitxor_rest(C, e);
-  if (!e) return NULL;
-  e = parse_bitor_rest(C, e);
-  if (!e) return NULL;
-  e = parse_and_rest(C, e);
-  if (!e) return NULL;
-  return parse_or_rest(C, e);
-}
-
 static OlExpr *parse_unary(ParseCtx *C) {
   if (C->L->tok == TOK_MINUS) {
     int line = C->L->line;
@@ -847,6 +899,315 @@ static OlExpr *parse_or(ParseCtx *C) {
 
 static OlExpr *parse_expr(ParseCtx *C) { return parse_or(C); }
 
+static OlExpr *parse_find_expr(ParseCtx *C) {
+  int line = C->L->line;
+  OlExpr *e = new_expr(OL_EX_FIND, line);
+  OlExpr *inner;
+  if (!e) return NULL;
+  if (!lex_next(C)) {
+    free(e);
+    return NULL;
+  }
+  if (!expect(C, TOK_LT)) {
+    free(e);
+    return NULL;
+  }
+  if (C->L->tok == TOK_GT) {
+    errf(C, "expected expression in find<...>");
+    free(e);
+    return NULL;
+  }
+  C->in_find_angle++;
+  inner = parse_expr(C);
+  if (!inner) {
+    C->in_find_angle--;
+    free(e);
+    return NULL;
+  }
+  if (!expect_angle_gt(C)) {
+    C->in_find_angle--;
+    free_expr(inner);
+    free(e);
+    return NULL;
+  }
+  C->in_find_angle--;
+  e->u.find_.inner = inner;
+  return e;
+}
+
+/* Continue after parse_postfix_chain (same tail as parse_expr_from_atom). */
+static OlExpr *parse_expr_after_postfix(ParseCtx *C, OlExpr *e) {
+  if (!e) return NULL;
+  e = parse_mul_rest(C, e);
+  if (!e) return NULL;
+  e = parse_add_rest(C, e);
+  if (!e) return NULL;
+  e = parse_shift_rest(C, e);
+  if (!e) return NULL;
+  e = parse_cmp_rest(C, e);
+  if (!e) return NULL;
+  e = parse_eq_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitand_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitxor_rest(C, e);
+  if (!e) return NULL;
+  e = parse_bitor_rest(C, e);
+  if (!e) return NULL;
+  e = parse_and_rest(C, e);
+  if (!e) return NULL;
+  return parse_or_rest(C, e);
+}
+
+/* @stack|@data|…<bits>(init?) → OL_EX_ALLOC */
+static OlExpr *parse_alloc_expr(ParseCtx *C, int allow_stack) {
+  int line = C->L->line;
+  OlExpr *e = new_expr(OL_EX_ALLOC, line);
+  OlAllocKind ak = OL_ALLOC_NONE;
+  uint32_t bw = 0;
+  OlExpr *init = NULL;
+  char custom[128];
+  memset(custom, 0, sizeof(custom));
+  if (!e) return NULL;
+  memset(e->u.alloc_.custom_section, 0, sizeof(e->u.alloc_.custom_section));
+  if (!expect(C, TOK_AT)) {
+    free(e);
+    return NULL;
+  }
+  if (C->L->tok != TOK_IDENT) {
+    errf(C, "expected allocator name after @");
+    free(e);
+    return NULL;
+  }
+  {
+    char kw[128];
+    snprintf(kw, sizeof(kw), "%s", C->L->ident);
+    if (!lex_next(C)) {
+      free(e);
+      return NULL;
+    }
+    if (strcmp(kw, "section") == 0) {
+      if (!expect(C, TOK_LPAREN)) {
+        free(e);
+        return NULL;
+      }
+      if (C->L->tok != TOK_STR) {
+        errf(C, "@section(\"name\") expected");
+        free(e);
+        return NULL;
+      }
+      snprintf(custom, sizeof(custom), "%s", C->L->str_val);
+      if (!lex_next(C)) {
+        free(e);
+        return NULL;
+      }
+      if (!expect(C, TOK_RPAREN)) {
+        free(e);
+        return NULL;
+      }
+      ak = OL_ALLOC_CUSTOM;
+    } else if (strcmp(kw, "stack") == 0) {
+      if (!allow_stack) {
+        errf(C, "@stack is only allowed inside functions");
+        free(e);
+        return NULL;
+      }
+      ak = OL_ALLOC_STACK;
+    } else if (strcmp(kw, "data") == 0) {
+      ak = OL_ALLOC_DATA;
+    } else if (strcmp(kw, "bss") == 0) {
+      ak = OL_ALLOC_BSS;
+    } else if (strcmp(kw, "rodata") == 0) {
+      ak = OL_ALLOC_RODATA;
+    } else {
+      errf(C, "unknown allocator after @");
+      free(e);
+      return NULL;
+    }
+  }
+  if (!expect(C, TOK_LT)) {
+    free(e);
+    return NULL;
+  }
+  if (C->L->tok == TOK_KW_SIZEOF) {
+    if (!lex_next(C)) {
+      free(e);
+      return NULL;
+    }
+    if (!expect(C, TOK_LT)) {
+      free(e);
+      return NULL;
+    }
+    if (!parse_type_ref(C, &e->u.alloc_.sizeof_bw_ty)) {
+      free(e);
+      return NULL;
+    }
+    if (!expect(C, TOK_GT)) {
+      free(e);
+      return NULL;
+    }
+    e->u.alloc_.bitwidth_is_sizeof = 1;
+    e->u.alloc_.bitwidth = 0;
+  } else if (C->L->tok == TOK_INT) {
+    if (C->L->int_val <= 0 || C->L->int_val > 0x7fffffffLL) {
+      errf(C, "invalid bit width");
+      free(e);
+      return NULL;
+    }
+    bw = (uint32_t)C->L->int_val;
+    if (!lex_next(C)) {
+      free(e);
+      return NULL;
+    }
+    e->u.alloc_.bitwidth_is_sizeof = 0;
+    e->u.alloc_.bitwidth = bw;
+  } else {
+    errf(C, "expected sizeof<Type> or integer bit width in < > after allocator");
+    free(e);
+    return NULL;
+  }
+  if (!expect(C, TOK_GT)) {
+    free(e);
+    return NULL;
+  }
+  if (!expect(C, TOK_LPAREN)) {
+    free(e);
+    return NULL;
+  }
+  if (C->L->tok == TOK_RPAREN) {
+    if (!lex_next(C)) {
+      free(e);
+      return NULL;
+    }
+  } else {
+    init = parse_expr(C);
+    if (!init) {
+      free(e);
+      return NULL;
+    }
+    if (!expect(C, TOK_RPAREN)) {
+      free_expr(init);
+      free(e);
+      return NULL;
+    }
+  }
+  e->u.alloc_.alloc = ak;
+  /* bitwidth set in int branch; sizeof uses 0 until sema folds sizeof_bw_ty */
+  e->u.alloc_.init = init;
+  memcpy(e->u.alloc_.custom_section, custom, sizeof(e->u.alloc_.custom_section));
+  return e;
+}
+
+/* after `<` consumed: `[Type]` `>` RefExpr; use `<void>` for untyped ptr view */
+static OlExpr *parse_ref_bind_after_lt(ParseCtx *C, int line, int allow_stack) {
+  OlExpr *e = new_expr(OL_EX_REF_BIND, line);
+  OlExpr *inner;
+  if (!e) return NULL;
+  if (!parse_type_ref(C, &e->u.ref_bind.to)) {
+    free(e);
+    return NULL;
+  }
+  if (!expect(C, TOK_GT)) {
+    free(e);
+    return NULL;
+  }
+  inner = parse_ref_expr(C, allow_stack);
+  if (!inner) {
+    free(e);
+    return NULL;
+  }
+  e->u.ref_bind.inner = inner;
+  return e;
+}
+
+static OlExpr *parse_ref_expr(ParseCtx *C, int allow_stack) {
+  int line = C->L->line;
+  if (C->L->tok == TOK_LPAREN) {
+    OlExpr *inner;
+    if (!lex_next(C)) return NULL;
+    inner = parse_ref_expr(C, allow_stack);
+    if (!inner) return NULL;
+    if (!expect(C, TOK_RPAREN)) {
+      free_expr(inner);
+      return NULL;
+    }
+    return inner;
+  }
+  if (C->L->tok == TOK_KW_FIND) {
+    return parse_find_expr(C);
+  }
+  if (C->L->tok == TOK_KW_ADDR) {
+    OlExpr *e = new_expr(OL_EX_ADDR, line);
+    if (!e) return NULL;
+    if (!lex_next(C)) return NULL;
+    if (C->L->tok != TOK_IDENT) {
+      errf(C, "expected ident after addr");
+      free(e);
+      return NULL;
+    }
+    snprintf(e->u.addr.name, sizeof(e->u.addr.name), "%s", C->L->ident);
+    if (!lex_next(C)) return NULL;
+    return e;
+  }
+  if (C->L->tok == TOK_AT) {
+    return parse_alloc_expr(C, allow_stack);
+  }
+  if (C->L->tok == TOK_LT) {
+    if (!lex_next(C)) return NULL;
+    return parse_ref_bind_after_lt(C, line, allow_stack);
+  }
+  if (C->L->tok == TOK_IDENT) {
+    OlExpr *e = new_expr(OL_EX_VAR, line);
+    if (!e) return NULL;
+    snprintf(e->u.var_name, sizeof(e->u.var_name), "%s", C->L->ident);
+    if (!lex_next(C)) return NULL;
+    return e;
+  }
+  if (is_T_angle_conv_starter(C->L->tok)) {
+    OlTok tykw = C->L->tok;
+    OlExpr *e = new_expr(OL_EX_CAST, line);
+    OlExpr *inner;
+    if (!e) return NULL;
+    if (!lex_next(C)) return NULL;
+    if (C->L->tok != TOK_LT) {
+      errf(C, "expected `<` after type in T<expr> conversion");
+      free(e);
+      return NULL;
+    }
+    if (!lex_next(C)) {
+      free(e);
+      return NULL;
+    }
+    if (!type_ref_from_conv_type_keyword(tykw, &e->u.cast_.to)) {
+      free(e);
+      return NULL;
+    }
+    if (C->L->tok == TOK_GT) {
+      errf(C, "expected expression in T<...>");
+      free(e);
+      return NULL;
+    }
+    C->in_find_angle++;
+    inner = parse_ref_expr(C, allow_stack);
+    if (!inner) {
+      C->in_find_angle--;
+      free(e);
+      return NULL;
+    }
+    if (!expect_angle_gt(C)) {
+      C->in_find_angle--;
+      free_expr(inner);
+      free(e);
+      return NULL;
+    }
+    C->in_find_angle--;
+    e->u.cast_.inner = inner;
+    return e;
+  }
+  errf(C, "expected ref expression");
+  return NULL;
+}
+
 static OlStmt *parse_stmt(ParseCtx *C);
 
 static OlStmt *parse_block(ParseCtx *C) {
@@ -880,6 +1241,52 @@ static OlStmt *parse_block(ParseCtx *C) {
 static OlStmt *parse_stmt(ParseCtx *C) {
   int line = C->L->line;
   if (C->L->tok == TOK_LBRACE) return parse_block(C);
+  if (C->L->tok == TOK_KW_STORE) {
+    OlStmt *s = new_stmt(OL_ST_STORE, line);
+    OlExpr *val;
+    OlExpr *target;
+    if (!s) return NULL;
+    if (!lex_next(C)) return NULL;
+    if (!expect(C, TOK_LT)) {
+      free(s);
+      return NULL;
+    }
+    C->in_find_angle++;
+    target = parse_shift(C);
+    C->in_find_angle--;
+    if (!target) {
+      free(s);
+      return NULL;
+    }
+    if (!expect(C, TOK_COMMA)) {
+      free_expr(target);
+      free(s);
+      return NULL;
+    }
+    C->in_find_angle++;
+    val = parse_shift(C);
+    C->in_find_angle--;
+    if (!val) {
+      free_expr(target);
+      free(s);
+      return NULL;
+    }
+    s->u.store_.target = target;
+    s->u.store_.val = val;
+    if (!expect(C, TOK_GT)) {
+      free_expr(val);
+      free_expr(target);
+      free(s);
+      return NULL;
+    }
+    if (!expect(C, TOK_SEMI)) {
+      free_expr(val);
+      free_expr(target);
+      free(s);
+      return NULL;
+    }
+    return s;
+  }
   if (C->L->tok == TOK_IDENT) {
     OlExpr *atom;
     char iname[128];
@@ -890,32 +1297,10 @@ static OlStmt *parse_stmt(ParseCtx *C) {
     if (!lex_next(C)) return NULL;
     {
       OlStmt *s;
-      OlExpr *e = parse_expr_from_atom(C, atom);
+      OlExpr *e = parse_postfix_chain(C, atom);
       if (!e) return NULL;
-      /* Check for assignment: expr = expr ; */
-      if (C->L->tok == TOK_EQ) {
-        OlStmt *as = new_stmt(OL_ST_ASSIGN, line);
-        if (!as) {
-          free_expr(e);
-          return NULL;
-        }
-        as->u.assign_.lhs = e;  /* e is the left value */
-        if (!lex_next(C)) { free_expr(e); free(as); return NULL; }
-        as->u.assign_.rhs = parse_expr(C);
-        if (!as->u.assign_.rhs) {
-          free_expr(e);
-          free(as);
-          return NULL;
-        }
-        if (!expect(C, TOK_SEMI)) {
-          free_expr(as->u.assign_.lhs);
-          free_expr(as->u.assign_.rhs);
-          free(as);
-          return NULL;
-        }
-        return as;
-      }
-      /* Not assignment, treat as expression statement */
+      e = parse_expr_after_postfix(C, e);
+      if (!e) return NULL;
       s = new_stmt(OL_ST_EXPR, line);
       if (!s) {
         free_expr(e);
@@ -934,25 +1319,21 @@ static OlStmt *parse_stmt(ParseCtx *C) {
     OlStmt *s = new_stmt(OL_ST_LET, line);
     if (!s) return NULL;
     if (!lex_next(C)) return NULL;
-    if (!parse_let_bindings(C, s->u.let_.bindings, &s->u.let_.binding_count)) {
-      free_expr(s->u.let_.init);
+    if (!parse_let_bindings_name_ty(C, s->u.let_.bindings, &s->u.let_.binding_count)) {
       free(s);
       return NULL;
     }
-    if (!parse_let_allocator(C, 1, &s->u.let_.alloc, &s->u.let_.bitwidth, &s->u.let_.init, s->u.let_.custom_section)) {
-      free_expr(s->u.let_.init);
+    if (C->L->tok == TOK_AT) {
+      s->u.let_.ref_expr = parse_alloc_expr(C, 1);
+    } else {
+      s->u.let_.ref_expr = parse_ref_expr(C, 1);
+    }
+    if (!s->u.let_.ref_expr) {
       free(s);
       return NULL;
     }
-    if (s->u.let_.alloc != OL_ALLOC_STACK) {
-      errf(C, "local let must use @stack<bits>(...)");
-      free_expr(s->u.let_.init);
-      free(s);
-      return NULL;
-    }
-    s->u.let_.custom_section[0] = '\0';
     if (!expect(C, TOK_SEMI)) {
-      free_expr(s->u.let_.init);
+      free_expr(s->u.let_.ref_expr);
       free(s);
       return NULL;
     }
@@ -1050,31 +1431,6 @@ static OlStmt *parse_stmt(ParseCtx *C) {
     }
     if (!expect(C, TOK_SEMI)) {
       free_expr(s->u.ret.val);
-      free(s);
-      return NULL;
-    }
-    return s;
-  }
-  if (C->L->tok == TOK_KW_DEREF) {
-    OlStmt *s = new_stmt(OL_ST_DEREF, line);
-    if (!s) return NULL;
-    if (!lex_next(C)) return NULL;
-    if (C->L->tok != TOK_IDENT) {
-      errf(C, "deref name");
-      free(s);
-      return NULL;
-    }
-    snprintf(s->u.deref.bind, sizeof(s->u.deref.bind), "%s", C->L->ident);
-    if (!lex_next(C)) return NULL;
-    if (!expect(C, TOK_KW_AS)) {
-      free(s);
-      return NULL;
-    }
-    if (!parse_type_ref(C, &s->u.deref.ty)) {
-      free(s);
-      return NULL;
-    }
-    if (!expect(C, TOK_SEMI)) {
       free(s);
       return NULL;
     }
@@ -1331,16 +1687,9 @@ static int parse_fn_name_params(ParseCtx *C, char *name_out, OlParam **params_ou
   return 1;
 }
 
-static int parse_let_bindings(ParseCtx *C, OlLetBinding *out, size_t *n_out) {
+static int parse_let_bindings_name_ty(ParseCtx *C, OlLetBinding *out, size_t *n_out) {
   *n_out = 0;
   for (;;) {
-    if (C->L->tok == TOK_AT) {
-      if (*n_out == 0) {
-        errf(C, "expected name<type> before @ in let");
-        return 0;
-      }
-      return 1;
-    }
     if (*n_out >= OL_MAX_LET_BINDINGS) {
       errf(C, "too many let bindings");
       return 0;
@@ -1352,126 +1701,48 @@ static int parse_let_bindings(ParseCtx *C, OlLetBinding *out, size_t *n_out) {
     snprintf(out[*n_out].name, sizeof(out[*n_out].name), "%s", C->L->ident);
     if (!lex_next(C)) return 0;
     if (!expect(C, TOK_LT)) return 0;
-    if (!parse_type_ref(C, &out[*n_out].ty)) return 0;
-    if (!expect(C, TOK_GT)) return 0;
-    (*n_out)++;
-  }
-}
-
-/* @stack / @data / @bss / @rodata / @section("name") then <BITWIDTH bits> then ( [expr] ) */
-static int parse_let_allocator(ParseCtx *C, int allow_stack, OlAllocKind *alloc_out, uint32_t *bitwidth_out, OlExpr **init_out, char custom_sec[128]) {
-  memset(custom_sec, 0, 128);
-  *init_out = NULL;
-  *alloc_out = OL_ALLOC_NONE;
-  if (!expect(C, TOK_AT)) return 0;
-  if (C->L->tok != TOK_IDENT) {
-    errf(C, "expected allocator name after @");
-    return 0;
-  }
-  {
-    char kw[128];
-    snprintf(kw, sizeof(kw), "%s", C->L->ident);
-    if (!lex_next(C)) return 0;
-    if (strcmp(kw, "section") == 0) {
-      if (!expect(C, TOK_LPAREN)) return 0;
-      if (C->L->tok != TOK_STR) {
-        errf(C, "@section(\"name\") expected");
-        return 0;
-      }
-      snprintf(custom_sec, 128, "%s", C->L->str_val);
+    if (C->L->tok == TOK_GT) {
       if (!lex_next(C)) return 0;
-      if (!expect(C, TOK_RPAREN)) return 0;
-      *alloc_out = OL_ALLOC_CUSTOM;
-    } else if (strcmp(kw, "stack") == 0) {
-      if (!allow_stack) {
-        errf(C, "@stack is only allowed inside functions");
-        return 0;
-      }
-      *alloc_out = OL_ALLOC_STACK;
-    } else if (strcmp(kw, "data") == 0) {
-      *alloc_out = OL_ALLOC_DATA;
-    } else if (strcmp(kw, "bss") == 0) {
-      *alloc_out = OL_ALLOC_BSS;
-    } else if (strcmp(kw, "rodata") == 0) {
-      *alloc_out = OL_ALLOC_RODATA;
+      out[*n_out].has_ty = 0;
+      memset(&out[*n_out].ty, 0, sizeof(OlTypeRef));
     } else {
-      errf(C, "unknown allocator after @");
-      return 0;
+      if (!parse_type_ref(C, &out[*n_out].ty)) return 0;
+      out[*n_out].has_ty = 1;
+      if (!expect(C, TOK_GT)) return 0;
     }
-  }
-  if (!expect(C, TOK_LT)) return 0;
-  if (C->L->tok != TOK_INT) {
-    errf(C, "expected integer bit width in < > after allocator");
-    return 0;
-  }
-  if (C->L->int_val <= 0 || C->L->int_val > 0x7fffffffLL) {
-    errf(C, "invalid bit width");
-    return 0;
-  }
-  *bitwidth_out = (uint32_t)C->L->int_val;
-  if (!lex_next(C)) return 0;
-  if (!expect(C, TOK_GT)) return 0;
-  if (!expect(C, TOK_LPAREN)) return 0;
-  if (C->L->tok == TOK_RPAREN) {
-    if (!lex_next(C)) return 0;
-  } else {
-    *init_out = parse_expr(C);
-    if (!*init_out) return 0;
-    if (!expect(C, TOK_RPAREN)) {
-      free_expr(*init_out);
-      *init_out = NULL;
-      return 0;
+    (*n_out)++;
+    if (C->L->tok == TOK_AT) return 1;
+    if (C->L->tok == TOK_KW_LET) {
+      if (!lex_next(C)) return 0;
+      continue;
     }
+    return 1;
   }
-  return 1;
 }
 
 static int parse_global_let(ParseCtx *C) {
   OlGlobalDef g;
   OlGlobalDef *ng;
-  OlAllocKind ak;
-  OlExpr *init = NULL;
-  char custom[128];
   OlLetBinding binds[OL_MAX_LET_BINDINGS];
   size_t nbind = 0;
   memset(&g, 0, sizeof(g));
   if (!expect(C, TOK_KW_LET)) return 0;
-  if (!parse_let_bindings(C, binds, &nbind)) return 0;
+  if (!parse_let_bindings_name_ty(C, binds, &nbind)) return 0;
   g.binding_count = nbind;
   memcpy(g.bindings, binds, nbind * sizeof(OlLetBinding));
-  if (!parse_let_allocator(C, 0, &ak, &g.bitwidth, &init, custom)) return 0;
-  g.init = init;
-  if (ak == OL_ALLOC_STACK) {
-    errf(C, "@stack is only allowed inside functions");
-    free_expr(g.init);
+  if (C->L->tok != TOK_AT) {
+    errf(C, "global let expects @data|@bss|@rodata|@section after bindings");
     return 0;
   }
-  switch (ak) {
-    case OL_ALLOC_DATA:
-      g.section = OL_GSEC_DATA;
-      break;
-    case OL_ALLOC_BSS:
-      g.section = OL_GSEC_BSS;
-      break;
-    case OL_ALLOC_RODATA:
-      g.section = OL_GSEC_RODATA;
-      break;
-    case OL_ALLOC_CUSTOM:
-      g.section = OL_GSEC_CUSTOM;
-      snprintf(g.custom_section, sizeof(g.custom_section), "%s", custom);
-      break;
-    default:
-      errf(C, "invalid global allocator");
-      free_expr(g.init);
-      return 0;
-  }
+  g.ref_expr = parse_alloc_expr(C, 0);
+  if (!g.ref_expr) return 0;
   if (!expect(C, TOK_SEMI)) {
-    free_expr(g.init);
+    free_expr(g.ref_expr);
     return 0;
   }
   ng = (OlGlobalDef *)realloc(C->prog->globals, (C->prog->global_count + 1) * sizeof(OlGlobalDef));
   if (!ng) {
-    free_expr(g.init);
+    free_expr(g.ref_expr);
     errf(C, "oom");
     return 0;
   }
@@ -1622,6 +1893,7 @@ int ol_parse_source_file(const char *path, OlProgram *out, char *err, size_t err
   C.L = &Lex;
   C.err = err;
   C.err_len = err_len;
+  C.in_find_angle = 0;
 
   while (C.L->tok != TOK_EOF) {
     if (C.L->tok == TOK_KW_EXTERN) {
@@ -1681,12 +1953,17 @@ static void free_expr(OlExpr *e) {
     case OL_EX_CAST:
       free_expr(e->u.cast_.inner);
       break;
-    case OL_EX_LOAD:
-      free_expr(e->u.load.ptr);
+    case OL_EX_REF_BIND:
+      free_expr(e->u.ref_bind.inner);
       break;
-    case OL_EX_STORE:
-      free_expr(e->u.store.ptr);
-      free_expr(e->u.store.val);
+    case OL_EX_FIND:
+      free_expr(e->u.find_.inner);
+      break;
+    case OL_EX_ALLOC:
+      free_expr(e->u.alloc_.init);
+      break;
+    case OL_EX_LOAD:
+      free_expr(e->u.load_.inner);
       break;
     case OL_EX_FIELD:
       free_expr(e->u.field.obj);
@@ -1697,9 +1974,6 @@ static void free_expr(OlExpr *e) {
       break;
     case OL_EX_BNOT:
       free_expr(e->u.bnot.inner);
-      break;
-    case OL_EX_REINTERPRET:
-      free_expr(e->u.reinterpret_.inner);
       break;
     case OL_EX_FLOAT:
     default:
@@ -1717,11 +1991,11 @@ static void free_stmt(OlStmt *s) {
         free_stmt(s->u.block.first);
         break;
       case OL_ST_LET:
-        free_expr(s->u.let_.init);
+        free_expr(s->u.let_.ref_expr);
         break;
-      case OL_ST_ASSIGN:
-        free_expr(s->u.assign_.lhs);
-        free_expr(s->u.assign_.rhs);
+      case OL_ST_STORE:
+        free_expr(s->u.store_.target);
+        free_expr(s->u.store_.val);
         break;
       case OL_ST_IF:
         free_expr(s->u.if_.cond);

@@ -4,12 +4,12 @@ extern i32 main() {
   let b<u64> @stack<64>(999999u64);
   let big<u64> @stack<64>(18446744073709551615u64);
 
-  if (a > b) {
-    if (a - b == 1u64) {
-      if (a * 2u64 == 2000000u64) {
-        if (a / 10u64 == 100000u64) {
-          if (a % 3u64 == 1u64) {
-            if (big != 0u64) {
+  if (load<a> > load<b>) {
+    if (load<a> - load<b> == 1u64) {
+      if (load<a> * 2u64 == 2000000u64) {
+        if (load<a> / 10u64 == 100000u64) {
+          if (load<a> % 3u64 == 1u64) {
+            if (load<big> != 0u64) {
               return 0;
             }
           }

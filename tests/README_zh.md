@@ -10,7 +10,7 @@
 make check
 ```
 
-顺序大致为：链接脚本单元测试（`bin/link_script_test`）、文档里指向 `.ol` 的 Markdown 链接检查（`python3 scripts/verify_doc_olang_refs.py`）、alinker、kasm、预处理器，最后是 OLang 集成（用 `examples/linux_x86_64/olc` 跑完 `examples/linux_x86_64/programs/ex_*.ol`、多文件链接，以及预期失败用例）。
+顺序大致为：链接脚本单元测试（`bin/link_script_test`）、文档里指向 `.ol` 的 Markdown 链接检查（`bash tests/verify_doc_olang_refs.sh`）、alinker、kasm、预处理器，最后是 OLang 集成（用 `examples/linux_x86_64/olc` 跑完 `examples/linux_x86_64/programs/ex_*.ol`、多文件链接，以及预期失败用例）。
 
 ### 快速子集（仅 OLang + 示例）
 

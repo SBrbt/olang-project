@@ -3,8 +3,8 @@
 
 extern i32 main() {
   let a<ptr> @stack<64>("A");
-  posix_write(1i64, a, 1i64);
-  a = "B";
-  posix_write(1i64, a, 1i64);
+  posix_write(1i64, load<a>, 1i64);
+  store<a, "B">;
+  posix_write(1i64, load<a>, 1i64);
   return 0;
 }
