@@ -12,7 +12,7 @@ _start: # entry point
   inst ret
 ASM
 
-"$BIN" --isa "$ROOT/kasm/isa/x86_64_linux.json" --in "$TMP/test.kasm" -o "$TMP/out.oobj"
+"$BIN" --isa "$ROOT/kasm/isa/x86_64.json" --in "$TMP/test.kasm" -o "$TMP/out.oobj"
 "$ROOT/bin/obinutils" oobj-nm "$TMP/out.oobj" | grep -q '_start'
 rm -rf "$TMP"
 echo "OK: kasm_label_comment"

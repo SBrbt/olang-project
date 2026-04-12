@@ -23,7 +23,7 @@ Generates:
 - `bin/olang` — compiler
 - `bin/kasm` — assembler
 - `bin/alinker` — linker
-- `examples/olc` — driver script (runs `olprep` then the rest; keeps intermediates in `<output>.olc.d/`)
+- `examples/linux_x86_64/olc` — driver script (runs `olprep` then the rest; keeps intermediates in `<output>.olc.d/`)
 
 ### Verify
 
@@ -34,7 +34,7 @@ make check
 
 ### First Program
 
-Create `hello.ol` in `examples/programs`:
+Create `hello.ol` in `examples/linux_x86_64/programs`:
 
 ```olang
 extern i32 main() {
@@ -45,9 +45,9 @@ extern i32 main() {
 Compile and run:
 
 ```bash
-mkdir -p examples/out
-bash examples/olc -o examples/out/hello.elf examples/programs/hello.ol
-./examples/out/hello.elf
+mkdir -p examples/linux_x86_64/out
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/hello.ol
+./examples/linux_x86_64/out/hello.elf
 echo $?
 # 42
 ```
@@ -64,7 +64,7 @@ echo $?
 Check GCC version: `gcc --version` (requires 4.8+)
 
 **Q: Cannot find `olc`?**
-Ensure you're in project root, use: `bash examples/olc`
+Ensure you're in project root, use: `bash examples/linux_x86_64/olc`
 
 **Q: "scalar needs initializer"?**
 ```olang

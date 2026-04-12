@@ -405,19 +405,14 @@ static int compute_load_groups_layout(const OobjObject *merged, const LinkScript
   return 1;
 }
 
-/* Linux x86-64 phase1: call entry (rel32 at +1) then mov edi,eax; mov eax,60; syscall */
-static const uint8_t k_linux_amd64_stub14[14] = {0xE8, 0, 0, 0, 0, 0x89, 0xC7, 0xB8, 0x3C, 0x00, 0x00, 0x00, 0x0F, 0x05};
-
+/* Entry stub bytes always come from the link script (`call_stub_hex`); alinker only patches rel32 at +1 when the first byte is 0xE8. */
 static int fill_and_patch_entry_stub(uint8_t *stub_buf, size_t stub_len, const LinkScript *script, uint64_t entry_off, char *err, size_t err_len) {
   if (stub_len == 0) return 1;
-  if (script->call_stub_len == stub_len) {
-    memcpy(stub_buf, script->call_stub_bytes, stub_len);
-  } else if (stub_len == sizeof(k_linux_amd64_stub14)) {
-    memcpy(stub_buf, k_linux_amd64_stub14, stub_len);
-  } else {
-    snprintf(err, err_len, "image: stub size %zu is neither custom (%zu) nor default (14)", stub_len, script->call_stub_len);
+  if (script->call_stub_len != stub_len) {
+    snprintf(err, err_len, "image: internal stub length mismatch");
     return 0;
   }
+  memcpy(stub_buf, script->call_stub_bytes, stub_len);
   if (stub_len >= 5u && stub_buf[0] == 0xE8u) {
     int64_t rel64 = (int64_t)(stub_len + entry_off) - 5;
     if (rel64 < (int64_t)INT32_MIN || rel64 > (int64_t)INT32_MAX) {
@@ -814,12 +809,14 @@ int alinker_link_oobj_only(const LinkScript *script, const char *output_path, in
     oobj_free(&merged);
     return 0;
   }
-  if (script->call_stub_len > 0u)
-    stub_len = script->call_stub_len;
-  else if (script->prepend_call_stub)
-    stub_len = 14u;
-  else
-    stub_len = 0u;
+  if (script->prepend_call_stub) {
+    if (script->call_stub_len == 0u) {
+      snprintf(err, err_len, "link: prepend_call_stub requires call_stub_hex in the link script");
+      oobj_free(&merged);
+      return 0;
+    }
+  }
+  stub_len = script->call_stub_len;
 
   if (script->load_group_count >= 2u) {
     if (!ensure_dummy_last_group_if_needed(&merged, script, err, err_len)) {

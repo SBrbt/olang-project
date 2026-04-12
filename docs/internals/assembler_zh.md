@@ -1,4 +1,4 @@
-# 汇编器实现
+# 汇编器（kasm）
 
 **[English](assembler.md)** | **中文**
 
@@ -6,66 +6,70 @@
 
 位置：`kasm/`
 
+### 作用
+
+`kasm` 把 `.kasm` 源文件汇编成 `.oobj`（段、符号、重定位）。**不**绑定某个操作系统；由你传入的 ISA JSON（`--isa`）决定 `inst` 有哪些助记符。
+
 ### 结构
 
 ```
 kasm/
 ├── src/
-│   ├── main.c          # 入口
-│   ├── kasm_asm.c/h    # 汇编核心
-│   └── kasm_isa.c/h    # ISA 解析
+│   ├── main.c          # 命令行（--in、-o、可选 --isa）
+│   ├── kasm_asm.c/h    # 按行汇编
+│   └── kasm_isa.c/h    # 将 ISA JSON 读入 `IsaSpec`
 └── isa/
-    └── x86_64_linux.json  # 指令集定义
+    └── x86_64.json     # 示例 ISA：固定前缀操作码 + 可选立即数 + pc32 重定位
 ```
 
-### ISA 定义
+### ISA JSON（`x86_64.json`）
 
-`kasm/isa/x86_64_linux.json` 定义：
-- 指令编码格式
-- 操作数类型
-- 寄存器编码
+每条指令对象包含：
 
-示例条目：
+| 字段 | 含义 |
+|------|------|
+| `mnemonic` | `inst` 后面写的名字 |
+| `bytes` | 十六进制字符串：先发出的操作码字节 |
+| `imm_bits` | `0`、`8`、`16`、`32`、`64`：在 `bytes` **之后**按小端写立即数（非 0 时） |
+| `reloc` | 可选 `"pc32"`：要求 `imm_bits` 为 32；操作数为符号名，对应位置做 PC 相对重定位 |
+
+示例：
+
 ```json
-{
-  "mnemonic": "mov",
-  "operands": ["r64", "r64"],
-  "encoding": ["0x48", "0x89", "/r"]
-}
+{ "mnemonic": "mov_rdi_r12", "bytes": "4c89e7", "imm_bits": 0 }
 ```
 
-### 汇编流程
+未收录的编码在源码里用 `.bytes` 手写。
 
-两遍汇编：
+### 汇编方式
 
-1. **第一遍** — 收集符号（标签地址）
-2. **第二遍** — 生成代码（解析指令、应用重定位）
+当前实现是**单行扫描、一遍向前**处理：标签绑定到**当前段**当前偏移；`inst` / `.bytes` 往该段追加；重定位在生成指令时记录。**没有**单独的「先收集全部标签再第二遍生成」阶段。
 
-### 关键函数
+### API
 
 ```c
-// 汇编主函数
-int kasm_assemble(KasmState *S, const char *input, size_t len);
-
-// ISA 加载
-int isa_load(ISA *isa, const char *path);
+int kasm_compile(IsaSpec *isa, const char *input_path, const char *output_path, OobjObject *obj);
 ```
 
-### 输入格式
+成功返回 `0`；`main.c` 里再用 `oobj_write_file` 写出 `.oobj`。
 
-```kasm
-; 注释
-label:
-    mov rax, 42
-    jmp label
-```
+### 源语言（子集）
+
+- 行注释：从 `#` 到行尾  
+- `.section 名 对齐 flags` — 切换/创建段  
+- `.global` / `.extern` — 符号  
+- `label:` — 当前位置标签  
+- `inst 助记符` 或 `inst 助记符 操作数` — ISA 里定义的指令  
+- `.bytes aa bb …` — 原始字节  
+- `.equ 名, 值` — 数值常量，供后面 `inst` 操作数替换  
+
+### 默认 ISA 路径
+
+省略 `--isa` 时，`main.c` 会查找 `kasm/isa/x86_64.json`（详见 `--help` 与 `OLANG_TOOLCHAIN_ROOT`）。
 
 ### 输出
 
-`.oobj` 对象文件：
-- 代码段
-- 符号表
-- 重定位表
+一个或多个代码段，以及 `.oobj` 中的符号表与重定位表（见 [oobj 规格](specs/oobj_zh.md)）。
 
 ---
 

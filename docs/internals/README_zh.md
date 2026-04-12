@@ -16,7 +16,7 @@
 | 汇编器实现 | [assembler_zh.md](assembler_zh.md) |
 | 链接器实现 | [linker_zh.md](linker_zh.md) |
 | 对象格式 | [specs/oobj_zh.md](specs/oobj_zh.md) |
-| ELF 布局 | [specs/elf-layout_zh.md](specs/elf-layout_zh.md) |
+| 示例 ELF 布局（linux_x86_64） | [specs/elf-layout_zh.md](specs/elf-layout_zh.md) |
 | 语法规格 | [specs/olang-syntax_zh.md](specs/olang-syntax_zh.md) |
 | 预处理器 | [preproc_zh.md](preproc_zh.md) |
 
@@ -38,7 +38,7 @@ kasm/
 │   ├── kasm_asm.c    # 汇编器
 │   └── kasm_isa.c    # ISA 解析
 └── isa/
-    └── x86_64_linux.json  # 指令集定义
+    └── x86_64.json  # 指令集定义（仅体系结构）
 
 alinker/
 └── src/

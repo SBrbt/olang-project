@@ -9,66 +9,66 @@
 # --- write(fd, buf, count) --- syscall 1, 3 params
 .global posix_write
 posix_write:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 48 b8 01 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_rax_imm64 1
 inst syscall
 inst ret
 
 # --- read(fd, buf, count) --- syscall 0, 3 params
 .global posix_read
 posix_read:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 48 b8 00 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_rax_imm64 0
 inst syscall
 inst ret
 
 # --- openat(dirfd, pathname, flags, mode) --- syscall 257, 4 params
 .global posix_openat
 posix_openat:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 4d 89 fa
-.bytes 48 b8 01 01 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_r10_r15
+inst mov_rax_imm64 257
 inst syscall
 inst ret
 
 # --- close(fd) --- syscall 3, 1 param
 .global posix_close
 posix_close:
-.bytes 4c 89 e7
-.bytes 48 b8 03 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rax_imm64 3
 inst syscall
 inst ret
 
 # --- getpid() --- syscall 39, 0 params
 .global posix_getpid
 posix_getpid:
-.bytes 48 b8 27 00 00 00 00 00 00 00
+inst mov_rax_imm64 39
 inst syscall
 inst ret
 
 # --- kill(pid, sig) --- syscall 62, 2 params
 .global posix_kill
 posix_kill:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 3e 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 62
 inst syscall
 inst ret
 
 # --- rt_sigprocmask(how, set, oldset, sigsetsize) --- syscall 14, 4 params
 .global posix_rt_sigprocmask
 posix_rt_sigprocmask:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 4d 89 fa
-.bytes 48 b8 0e 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_r10_r15
+inst mov_rax_imm64 14
 inst syscall
 inst ret
 
@@ -78,93 +78,93 @@ inst ret
 # Must save rdi/rsi before overwriting them with r12/r13.
 .global posix_mmap
 posix_mmap:
-.bytes 49 89 f8
-.bytes 49 89 f1
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 4d 89 fa
-.bytes 48 b8 09 00 00 00 00 00 00 00
+inst mov_r8_rdi
+inst mov_r9_rsi
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_r10_r15
+inst mov_rax_imm64 9
 inst syscall
 inst ret
 
 # --- munmap(addr, len) --- syscall 11, 2 params
 .global posix_munmap
 posix_munmap:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 0b 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 11
 inst syscall
 inst ret
 
 # --- clock_gettime(clk_id, tp) --- syscall 228, 2 params
 .global posix_clock_gettime
 posix_clock_gettime:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 e4 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 228
 inst syscall
 inst ret
 
 # --- gettimeofday(tv, tz) --- syscall 96, 2 params
 .global posix_gettimeofday
 posix_gettimeofday:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 60 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 96
 inst syscall
 inst ret
 
 # --- fstat(fd, statbuf) --- syscall 5, 2 params
 .global posix_fstat
 posix_fstat:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 05 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 5
 inst syscall
 inst ret
 
 # --- getdents64(fd, dirp, count) --- syscall 217, 3 params
 .global posix_getdents64
 posix_getdents64:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 48 b8 d9 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_rax_imm64 217
 inst syscall
 inst ret
 
 # --- nanosleep(req, rem) --- syscall 35, 2 params
 .global posix_nanosleep
 posix_nanosleep:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 48 b8 23 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rax_imm64 35
 inst syscall
 inst ret
 
 # --- fork() --- syscall 57, 0 params
 .global posix_fork
 posix_fork:
-.bytes 48 b8 39 00 00 00 00 00 00 00
+inst mov_rax_imm64 57
 inst syscall
 inst ret
 
 # --- wait4(pid, wstatus, options, rusage) --- syscall 61, 4 params
 .global posix_wait4
 posix_wait4:
-.bytes 4c 89 e7
-.bytes 4c 89 ee
-.bytes 4c 89 f2
-.bytes 4d 89 fa
-.bytes 48 b8 3d 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rsi_r13
+inst mov_rdx_r14
+inst mov_r10_r15
+inst mov_rax_imm64 61
 inst syscall
 inst ret
 
 # --- exit(status) --- syscall 60, 1 param
 .global posix_exit
 posix_exit:
-.bytes 4c 89 e7
-.bytes 48 b8 3c 00 00 00 00 00 00 00
+inst mov_rdi_r12
+inst mov_rax_imm64 60
 inst syscall
 inst ret

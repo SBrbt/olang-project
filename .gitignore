@@ -1,5 +1,6 @@
 # Build output
 bin/
+examples/linux_x86_64/out/
 examples/out/
 *.olc.d/
 

@@ -210,7 +210,7 @@ int isa_load(const char *path, IsaSpec *out, char *err, size_t err_len) {
       isa_free(out);
       return 0;
     }
-    if (!(imm == 0 || imm == 8 || imm == 32 || imm == 64)) {
+    if (!(imm == 0 || imm == 8 || imm == 16 || imm == 32 || imm == 64)) {
       free(json);
       snprintf(err, err_len, "unsupported imm_bits in isa: %u", imm);
       isa_free(out);

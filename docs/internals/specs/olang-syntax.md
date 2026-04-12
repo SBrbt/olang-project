@@ -17,7 +17,7 @@ This document describes the syntax accepted by `lexer.c` / `parser.c`.
   - `let` globals: one or more `Ident < Type >`, then an **allocator** `@data<BITWIDTH>`, `@bss<BITWIDTH>`, `@rodata<BITWIDTH>`, `@section("name")<BITWIDTH>` (`BITWIDTH` is an integer literal, total size in bits; not `@stack`)
   - `type` type definitions
 - At least one function with body required
-- Entry: exported function named `main`, or last function with body
+- **`extern` definition** exports the function symbol; a top-level function **without** `extern` is internal to the compilation unit (not exported from the `.oobj`). The ELF process entry symbol is chosen only by the **link script** (`"entry"`, e.g. [`examples/linux_x86_64/link/linux_elf_exe.json`](../../examples/linux_x86_64/link/linux_elf_exe.json)), not by the compiler
 
 ### Lexical
 

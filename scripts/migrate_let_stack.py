@@ -70,8 +70,12 @@ def process_file(path: Path) -> bool:
 
 
 def main():
-    # Skip examples/out (build artifacts)
-    globs = ["examples/programs/*.ol", "examples/include/*.ol", "tests/**/*.ol"]
+    # Skip examples/linux_x86_64/out (build artifacts)
+    globs = [
+        "examples/linux_x86_64/programs/*.ol",
+        "examples/linux_x86_64/include/*.ol",
+        "tests/**/*.ol",
+    ]
     n = 0
     for pattern in globs:
         for path in sorted(ROOT.glob(pattern)):

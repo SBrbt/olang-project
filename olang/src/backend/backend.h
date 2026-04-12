@@ -7,15 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Backend selection uses `arch`; `name` is copied into the .oobj header. Other ABI details
+ * live in the architecture backend (e.g. codegen_x64.c), not in this struct. */
 typedef struct OlTargetInfo {
   char name[128];
   char arch[32];
-  char abi[32];
-  char ptr_type[16];
-  uint8_t ptr_size;
-  uint8_t stack_align;
-  char call_reg0[8];
-  char ret_reg0[8];
 } OlTargetInfo;
 
 typedef struct OlEmitContext {

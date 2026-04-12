@@ -1651,30 +1651,6 @@ int ol_parse_source_file(const char *path, OlProgram *out, char *err, size_t err
     ol_program_free(out);
     return 0;
   }
-  {
-    size_t i;
-    int found = 0;
-    for (i = 0; i < out->func_count; ++i) {
-      if (strcmp(out->funcs[i].name, "main") == 0) {
-        snprintf(out->entry_name, sizeof(out->entry_name), "%s", "main");
-        found = 1;
-        break;
-      }
-    }
-    if (!found) snprintf(out->entry_name, sizeof(out->entry_name), "%s", out->funcs[out->func_count - 1].name);
-  }
-  {
-    size_t ei;
-    for (ei = 0; ei < out->func_count; ++ei) {
-      if (strcmp(out->funcs[ei].name, out->entry_name) != 0) continue;
-      if (!out->funcs[ei].is_export) {
-        snprintf(err, err_len, "entry function %s must be exported (use extern Ret %s() { })", out->entry_name, out->entry_name);
-        ol_program_free(out);
-        return 0;
-      }
-      break;
-    }
-  }
   return 1;
 
 fail:

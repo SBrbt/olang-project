@@ -1,9 +1,10 @@
 {
   "entry": "_start",
   "prepend_call_stub": true,
+  "call_stub_hex": "E80000000089C7B83C0000000F05",
   "load_groups": [
     { "sections": [".text", ".rodata"], "align_after": "0x1000" },
-    { "sections": [".data", ".bss"] }
+    { "sections": [".data", ".bss", ".ol_custom"] }
   ],
   "segments": [
     {

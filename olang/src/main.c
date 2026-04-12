@@ -8,14 +8,14 @@
 #include <string.h>
 
 static void print_olang_usage(FILE *out) {
-  fprintf(out, "usage: olang [--target <triple>] --in <file.ol> -o <out.oobj>\n");
+  fprintf(out, "usage: olang --target <name> --in <file.ol> -o <out.oobj>\n");
   fprintf(out, "       olang -h | --help\n");
 }
 
 int main(int argc, char **argv) {
   const char *input = NULL;
   const char *output = NULL;
-  const char *target = "x86_64";
+  const char *target = NULL;
   const OlTargetInfo *ti;
   const OlBackendVTable *be;
   OlProgram program;
@@ -59,6 +59,11 @@ int main(int argc, char **argv) {
     return 2;
   }
   if (!input || !output) {
+    print_olang_usage(stderr);
+    return 2;
+  }
+  if (!target) {
+    fprintf(stderr, "olang: --target is required\n");
     print_olang_usage(stderr);
     return 2;
   }

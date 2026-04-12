@@ -23,7 +23,7 @@ make all
 - `bin/olang` — 编译器
 - `bin/kasm` — 汇编器
 - `bin/alinker` — 链接器
-- `examples/olc` — 驱动脚本（先跑 `olprep` 再链其余工具；中间文件保留在 `<输出名>.olc.d/`）
+- `examples/linux_x86_64/olc` — 驱动脚本（先跑 `olprep` 再链其余工具；中间文件保留在 `<输出名>.olc.d/`）
 
 ### 验证
 
@@ -34,7 +34,7 @@ make check
 
 ### 第一个程序
 
-在`examples/programs`里创建 `hello.ol`：
+在 `examples/linux_x86_64/programs` 里创建 `hello.ol`：
 
 ```olang
 extern i32 main() {
@@ -45,9 +45,9 @@ extern i32 main() {
 编译运行：
 
 ```bash
-mkdir -p examples/out
-bash examples/olc -o examples/out/hello.elf examples/programs/hello.ol
-./examples/out/hello.elf
+mkdir -p examples/linux_x86_64/out
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/hello.ol
+./examples/linux_x86_64/out/hello.elf
 echo $?
 # 42
 ```
@@ -64,7 +64,7 @@ echo $?
 检查 GCC 版本：`gcc --version`（需要 4.8+）
 
 **Q: 找不到 `olc`？**
-确保在项目根目录，使用：`bash examples/olc`
+确保在项目根目录，使用：`bash examples/linux_x86_64/olc`
 
 **Q: "标量需要初始值"？**
 ```olang

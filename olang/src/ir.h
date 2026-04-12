@@ -28,8 +28,6 @@ typedef struct OlTypeDef {
 } OlTypeDef;
 
 struct OlProgram {
-  char target_name[128];
-  char entry_name[128];
   char source_path[512]; /* set by parser; CU hash for local fn link_name */
   OlExternDecl *externs;
   size_t extern_count;

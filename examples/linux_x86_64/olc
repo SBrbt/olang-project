@@ -4,9 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TOOLCHAIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-EXAMPLES="$TOOLCHAIN_ROOT/examples"
-PLATFORM="$EXAMPLES/linux_x86_64"
+TOOLCHAIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PLATFORM="$SCRIPT_DIR"
 export OLANG_TOOLCHAIN_ROOT="$TOOLCHAIN_ROOT"
 
 OLPREP="$TOOLCHAIN_ROOT/bin/olprep"
@@ -14,7 +13,7 @@ OLANG="$TOOLCHAIN_ROOT/bin/olang"
 KASM="$TOOLCHAIN_ROOT/bin/kasm"
 ALINKER="$TOOLCHAIN_ROOT/bin/alinker"
 
-EXE_JSON="$PLATFORM/link/exe.json"
+EXE_JSON="$PLATFORM/link/linux_elf_exe.json"
 KRT_KASM="$PLATFORM/asm/runtime/krt.kasm"
 OLRT_KASM="$PLATFORM/asm/runtime/olrt.kasm"
 POSIX_KASM="$PLATFORM/asm/lib/libposix.kasm"
@@ -26,7 +25,7 @@ usage() {
 usage: olc -o <out.elf> <a.ol> [b.ol ...]
        olc -h
   Linux x86_64 ELF: each .ol -> olprep -> .oobj, then link with runtime.
-  Preset paths: examples/linux_x86_64/{link/exe.json, asm/**}
+  Preset paths: examples/linux_x86_64/{link/linux_elf_exe.json, asm/**}
   Work directory: <dir(out.elf)>/<basename(out.elf)>.olc.d/ (pp*.ol, u*.oobj, runtime .oobj)
   Requires: make to generate bin/olprep, olang, kasm, alinker.
 EOF
@@ -83,8 +82,8 @@ WORKDIR=$(cd "$out_dir" && echo "$(pwd)/${out_base}.olc.d")
 mkdir -p "$WORKDIR"
 
 for i in "${!sources[@]}"; do
-  "$OLPREP" --in "${sources[$i]}" -o "$WORKDIR/pp${i}.ol" -I "$EXAMPLES/include"
-  "$OLANG" --in "$WORKDIR/pp${i}.ol" -o "$WORKDIR/u${i}.oobj"
+  "$OLPREP" --in "${sources[$i]}" -o "$WORKDIR/pp${i}.ol" -I "$PLATFORM/include"
+  "$OLANG" --target x86_64 --in "$WORKDIR/pp${i}.ol" -o "$WORKDIR/u${i}.oobj"
 done
 
 "$KASM" --in "$KRT_KASM" -o "$WORKDIR/krt.oobj"

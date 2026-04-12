@@ -49,7 +49,7 @@ lib.ol ────> olang ──> lib.oobj ────┘
 
 #### kasm
 
-JSON-ISA based assembler (`kasm/isa/x86_64_linux.json`):
+JSON-ISA based assembler (`kasm/isa/x86_64.json`):
 - Two-pass assembly
 - Supports labels, immediates, registers
 

@@ -1,5 +1,5 @@
 // Linux x86_64 syscall shims from libposix.kasm (OLang register ABI -> Linux syscall ABI).
-// Linked by examples/olc together with libposix.oobj. Use via: #include "posix_abi.ol"
+// Linked by examples/linux_x86_64/olc together with libposix.oobj. Use via: #include "posix_abi.ol"
 // (olc passes -I to the preprocessor for this directory.)
 // Parameter names avoid OLang keywords (e.g. "addr" is reserved).
 

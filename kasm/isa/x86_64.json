@@ -1,5 +1,5 @@
 {
-  "name": "x86_64-linux-core",
+  "name": "x86_64",
   "instructions": [
     { "mnemonic": "ret", "bytes": "c3", "imm_bits": 0 },
     { "mnemonic": "nop", "bytes": "90", "imm_bits": 0 },
@@ -56,6 +56,14 @@
     { "mnemonic": "mov_rbp_rsp", "bytes": "4889e5", "imm_bits": 0 },
     { "mnemonic": "mov_edi_eax", "bytes": "89c7", "imm_bits": 0 },
 
+    { "mnemonic": "mov_rdi_r12", "bytes": "4c89e7", "imm_bits": 0 },
+    { "mnemonic": "mov_rsi_r13", "bytes": "4c89ee", "imm_bits": 0 },
+    { "mnemonic": "mov_rdx_r14", "bytes": "4c89f2", "imm_bits": 0 },
+    { "mnemonic": "mov_r10_r15", "bytes": "4d89fa", "imm_bits": 0 },
+    { "mnemonic": "mov_rax_r12", "bytes": "4c89e0", "imm_bits": 0 },
+    { "mnemonic": "mov_r8_rdi", "bytes": "4989f8", "imm_bits": 0 },
+    { "mnemonic": "mov_r9_rsi", "bytes": "4989f1", "imm_bits": 0 },
+
     { "mnemonic": "xor_eax_eax", "bytes": "31c0", "imm_bits": 0 },
     { "mnemonic": "xor_edi_edi", "bytes": "31ff", "imm_bits": 0 },
     { "mnemonic": "xor_edx_edx", "bytes": "31d2", "imm_bits": 0 },
@@ -67,6 +75,8 @@
     { "mnemonic": "test_eax_eax", "bytes": "85c0", "imm_bits": 0 },
     { "mnemonic": "test_rax_rax", "bytes": "4885c0", "imm_bits": 0 },
     { "mnemonic": "cmp_eax_imm32", "bytes": "3d", "imm_bits": 32 },
-    { "mnemonic": "cmp_rdi_imm32", "bytes": "4881ff", "imm_bits": 32 }
+    { "mnemonic": "cmp_rdi_imm32", "bytes": "4881ff", "imm_bits": 32 },
+
+    { "mnemonic": "mov_ax_imm16", "bytes": "66b8", "imm_bits": 16 }
   ]
 }

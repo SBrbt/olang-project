@@ -8,22 +8,22 @@
 
 | 路径 | 作用 |
 |------|------|
-| [`programs/`](programs/) | `ex_*.ol` 单文件测试；`multi_file_main.ol` / `multi_file_lib.ol` 双单元链接 |
-| [`linux_x86_64/`](linux_x86_64/) | Linux x86_64 平台包：`link/*.json`、`asm/**` |
-| [`olc`](olc) | Bash 驱动（调用 `bin/olang`、`kasm`、`alinker`） |
-| `out/` | 产物目录（勿提交） |
+| [`linux_x86_64/`](linux_x86_64/) | **Linux x86_64** 平台包：[`olc`](linux_x86_64/olc)、[`programs/`](linux_x86_64/programs/)、[`include/`](linux_x86_64/include/)、[`link/linux_elf_exe.json`](linux_x86_64/link/linux_elf_exe.json)、[`asm/`](linux_x86_64/asm/) |
+| [`bare_x86_64/`](bare_x86_64/) | **x86_64 裸机** 链接脚本示例（扁平原始映像；与 Linux 无关） |
 
-### 快速开始
+使用 Linux 驱动时的产物放在 `linux_x86_64/out/`（勿提交；测试或本地运行会创建）。
+
+### 快速开始（Linux ELF）
 
 ```bash
 make all
-bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
-./examples/out/hello.elf
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/ex_hello.ol
+./examples/linux_x86_64/out/hello.elf
 ```
 
 ### 期望结果
 
-退出码与 stdout 以 [`tests/olang/run_programs_olc.sh`](../tests/olang/run_programs_olc.sh) 为准（`make check` 会执行）；下表便于阅读，不一致时以脚本为准。
+退出码与 stdout 以 [`tests/olang/run_programs_olc.sh`](../tests/olang/run_programs_olc.sh) 为准（`make check` 会执行）；学习文档里的表便于阅读，不一致时以脚本为准。
 
 | 程序 (`ex_*.ol`) | 期望 |
 |------------------|------|
@@ -38,19 +38,19 @@ bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
 - 默认 **`return cast<i32>(0)`** 表示通过。
 - Phase 1 无对已有 `let` 的赋值；计数场景可能用递归代替可变循环。
 
-新增 `ex_*.ol` 时脚本会自动编译运行；需要特殊 stdout/退出码断言时编辑 `tests/olang/run_programs_olc.sh`。
+在 `linux_x86_64/programs/` 下新增 `ex_*.ol` 会被测试脚本自动收录；需要特殊 stdout/退出码断言时编辑 `tests/olang/run_programs_olc.sh`。
 
 ### 多文件示例
 
 ```bash
-bash examples/olc -o examples/out/multi.elf \
-    examples/programs/multi_file_main.ol \
-    examples/programs/multi_file_lib.ol
-./examples/out/multi.elf; echo $?
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/multi.elf \
+    examples/linux_x86_64/programs/multi_file_main.ol \
+    examples/linux_x86_64/programs/multi_file_lib.ol
+./examples/linux_x86_64/out/multi.elf; echo $?
 # 42
 ```
 
-每个 `.ol` 编译为 `.oobj`，然后与运行时一并链接。详见 [docs/learn/tutorial_zh.md](../docs/learn/tutorial_zh.md)。
+详见 [docs/learn/tutorial_zh.md](../docs/learn/tutorial_zh.md)。
 
 ---
 

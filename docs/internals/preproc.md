@@ -8,12 +8,12 @@
 
 ### Role in the toolchain
 
-`examples/olc` runs, for each source `.ol`:
+`examples/linux_x86_64/olc` runs, for each source `.ol`:
 
-1. `olprep --in <source> -o <workdir>/ppN.ol -I <repo>/examples/include`
-2. `olang --in <workdir>/ppN.ol -o <workdir>/uN.oobj`
+1. `olprep --in <source> -o <workdir>/ppN.ol -I <repo>/examples/linux_x86_64/include`
+2. `olang --target x86_64 --in <workdir>/ppN.ol -o <workdir>/uN.oobj`
 
-The default `-I` lets sources use `#include "posix_abi.ol"` for `extern` declarations matching [`libposix.kasm`](../../examples/linux_x86_64/asm/lib/libposix.kasm) (see [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol)).
+The default `-I` lets sources use `#include "posix_abi.ol"` for `extern` declarations matching [`libposix.kasm`](../../examples/linux_x86_64/asm/lib/libposix.kasm) (see [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol)).
 3. … then `kasm` / `alinker` as before.
 
 ### Implemented directives

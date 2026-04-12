@@ -1,4 +1,4 @@
-# Linker
+# Linker (alinker)
 
 **English** | **[中文](linker_zh.md)**
 
@@ -6,75 +6,53 @@
 
 Location: `alinker/`
 
+### Role
+
+`alinker` merges `.oobj` inputs according to a **link script** (JSON) and writes the output file. The core **does not assume** a particular executable format, OS, or ABI: it only merges sections and symbols, applies relocations, concatenates payload bytes in `load_groups` order, and runs the script’s **`layout`** operations (writes at explicit file offsets). Whatever bytes the script places at the start of the file (ELF header blobs, raw images, etc.) are **script-defined**, not built into the linker as “ELF knowledge.”
+
+Optional **entry stub** bytes (`call_stub_hex`) are copied from the script; if the first byte is `0xE8`, the linker patches the **rel32** at offset +1 so a `call` reaches the symbol named by `"entry"`. No other stub semantics are hardcoded.
+
 ### Structure
 
 ```
 alinker/
 └── src/
-    ├── main.c          # Entry point
-    └── link_core.c/h   # Linking core
+    ├── main.c          # CLI
+    └── link_core.c/h   # Merge, relocate, layout eval, emit
 ```
 
-### Linking Flow
+### Linking flow
 
 ```
 Input: .oobj files + link.json
      ↓
-1. Load all object files
+1. Load and merge objects (sections, symbols, relocs)
      ↓
-2. Merge sections, resolve symbols
+2. Apply relocations using computed section bases / VMAs from the script
      ↓
-3. Process relocations
+3. Build contiguous payload (optional stub from script + section bytes per load_groups)
      ↓
-4. Execute link script ops
+4. Evaluate layout ops (write_blob / write_u32_le / write_u64_le / write_payload)
      ↓
-Output: ELF or raw binary
+Output: whatever file the script describes
 ```
 
-### Link Script
+### Link script
 
-`link.json` format:
+The script drives **everything**: `entry`, `segments`, `load_groups`, `prepend_call_stub`, `call_stub_hex`, `layout`, etc. See `common/link_script.c` and scripts under `examples/linux_x86_64/link/` (Linux ELF) and `examples/bare_x86_64/link/` (flat raw image).
 
-```json
-{
-  "format": "elf",
-  "entry": "_start",
-  "segments": [
-    { "name": ".text", "flags": "RX", "vaddr": 4194304 }
-  ],
-  "ops": [
-    { "op": "write_blob", "section": ".text", "data": "..." },
-    { "op": "write_u64_le", "value": "..." }
-  ]
-}
-```
+- **`"entry"`** — symbol name used to resolve the entry point and to patch a leading `call` stub when `call_stub_hex` is present.
+- **`call_stub_hex`** — required when **`prepend_call_stub`** is true: raw bytes prepended before merged section data (no default stub inside alinker).
 
-### Key Functions
+### API
 
 ```c
-// Main linking function
-int link_perform(LinkContext *ctx);
-
-// Process relocations
-int link_apply_relocs(LinkContext *ctx, OlObjFile *obj);
+int alinker_link_oobj_only(const LinkScript *script, const char *output_path, int verbose, char *err, size_t err_len);
 ```
 
-### Supported Ops
+### Relocation kinds (in `.oobj`)
 
-| Op | Description |
-|----|-------------|
-| `write_blob` | Write byte blob |
-| `write_u32_le` | Write 32-bit little-endian |
-| `write_u64_le` | Write 64-bit little-endian |
-| `write_payload` | Write section content |
-
-### Relocation Types
-
-| Type | Description |
-|------|-------------|
-| `R_X86_64_64` | Absolute 64-bit |
-| `R_X86_64_PC32` | PC-relative 32-bit |
-| `R_X86_64_32` | Absolute 32-bit |
+The merger understands `OOBJ` relocation records (`ABS64`, `PC32`, `PC64`); naming in docs may mirror x86 habits, but the linker is **generic** over “patch N bits at offset.”
 
 ---
 

@@ -17,7 +17,7 @@
   - `let` 全局变量：一个或多个 `名字 < 类型 >`，再写**分配器** `@data<位数>`、`@bss<位数>`、`@rodata<位数>`、`@section("段名")<位数>`（位数为整数字面量，表示存储总位数；不能用 `@stack`）
   - `type` 类型定义
 - 至少有一个带体的函数
-- 入口：名为 `main` 的导出函数，或最后一个带体函数
+- 带 **`extern` 的函数定义**会导出符号；顶层函数**没有** `extern` 则仅在当前编译单元内可见（`.oobj` 不导出）。ELF 进程入口符号只由**链接脚本**的 `"entry"` 决定（例如 [`examples/linux_x86_64/link/linux_elf_exe.json`](../../examples/linux_x86_64/link/linux_elf_exe.json)），不由编译器指定
 
 ### 词法
 

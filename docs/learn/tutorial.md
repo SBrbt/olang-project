@@ -244,7 +244,7 @@ extern i32 main() {
 
 Compile:
 ```bash
-bash examples/olc -o examples/out/prog.elf main.ol lib.ol
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/prog.elf main.ol lib.ol
 ```
 
 ---

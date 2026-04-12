@@ -16,7 +16,7 @@ Documentation for contributors.
 | Assembler | [assembler.md](assembler.md) |
 | Linker | [linker.md](linker.md) |
 | Object Format | [specs/oobj.md](specs/oobj.md) |
-| ELF Layout | [specs/elf-layout.md](specs/elf-layout.md) |
+| Example ELF layout (linux_x86_64) | [specs/elf-layout.md](specs/elf-layout.md) |
 | Syntax Spec | [specs/olang-syntax.md](specs/olang-syntax.md) |
 | Preprocessor | [preproc.md](preproc.md) |
 
@@ -38,7 +38,7 @@ kasm/
 │   ├── kasm_asm.c    # Assembler
 │   └── kasm_isa.c    # ISA parser
 └── isa/
-    └── x86_64_linux.json  # Instruction set definition
+    └── x86_64.json  # Instruction set definition (architecture only)
 
 alinker/
 └── src/

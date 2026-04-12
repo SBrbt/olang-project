@@ -8,12 +8,12 @@
 
 ### 在工具链中的位置
 
-`examples/olc` 对每个源 `.ol` 依次执行：
+`examples/linux_x86_64/olc` 对每个源 `.ol` 依次执行：
 
-1. `olprep --in <源文件> -o <工作目录>/ppN.ol -I <仓库>/examples/include`
-2. `olang --in <工作目录>/ppN.ol -o <工作目录>/uN.oobj`
+1. `olprep --in <源文件> -o <工作目录>/ppN.ol -I <仓库>/examples/linux_x86_64/include`
+2. `olang --target x86_64 --in <工作目录>/ppN.ol -o <工作目录>/uN.oobj`
 
-默认的 `-I` 使源码可写 `#include "posix_abi.ol"`，其中声明与 [`libposix.kasm`](../../examples/linux_x86_64/asm/lib/libposix.kasm) 中的符号一致（见 [`examples/include/posix_abi.ol`](../../examples/include/posix_abi.ol)）。
+默认的 `-I` 使源码可写 `#include "posix_abi.ol"`，其中声明与 [`libposix.kasm`](../../examples/linux_x86_64/asm/lib/libposix.kasm) 中的符号一致（见 [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol)）。
 3. … 随后仍是 `kasm` / `alinker`。
 
 ### 已实现的指令

@@ -13,7 +13,7 @@ const OlTargetInfo *ol_target_info_by_name(const char *name) {
   if (strcmp(name, "x86_64-alt") == 0) {
     if (!alt_init) {
       x64_alt = *x64;
-      snprintf(x64_alt.name, sizeof(x64_alt.name), "%s", "x86_64-linux-sysv-alt");
+      snprintf(x64_alt.name, sizeof(x64_alt.name), "%s", "x86_64-alt");
       alt_init = 1;
     }
     return &x64_alt;

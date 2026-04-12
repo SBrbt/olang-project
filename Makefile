@@ -39,7 +39,7 @@ $(BIN_DIR)/olprep: $(BIN_DIR) preproc/src/main.c
 	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L -o $@ preproc/src/main.c
 
 clean:
-	rm -rf $(BIN_DIR) examples/out
+	rm -rf $(BIN_DIR) examples/linux_x86_64/out
 
 check: all check-link-script check-doc-refs check-alinker check-kasm check-preproc check-olang
 	@echo "OK: all checks passed"

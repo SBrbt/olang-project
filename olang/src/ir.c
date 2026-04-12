@@ -93,8 +93,6 @@ static void free_stmt(OlStmt *s) {
 
 void ol_program_init(OlProgram *p) {
   memset(p, 0, sizeof(*p));
-  snprintf(p->target_name, sizeof(p->target_name), "%s", "x86_64-linux");
-  snprintf(p->entry_name, sizeof(p->entry_name), "%s", "main");
 }
 
 void ol_program_free(OlProgram *p) {

@@ -99,6 +99,16 @@ static int emit_u32le(uint8_t **text, size_t *text_len, uint32_t v) {
   return 1;
 }
 
+static int emit_u16le(uint8_t **text, size_t *text_len, uint16_t v) {
+  uint8_t *next = (uint8_t *)realloc(*text, *text_len + 2);
+  if (!next) return 0;
+  *text = next;
+  (*text)[*text_len + 0] = (uint8_t)(v & 0xff);
+  (*text)[*text_len + 1] = (uint8_t)((v >> 8) & 0xff);
+  *text_len += 2;
+  return 1;
+}
+
 static int emit_bytes(uint8_t **text, size_t *text_len, const uint8_t *bytes, size_t byte_len) {
   uint8_t *next = (uint8_t *)realloc(*text, *text_len + byte_len);
   if (!next) return 0;
@@ -385,6 +395,29 @@ int kasm_compile(IsaSpec *isa, const char *input_path, const char *output_path, 
             }
             cur_sec->data = next;
             cur_sec->data[cur_sec->data_len++] = (uint8_t)imm_l;
+          } else if (ii->imm_bits == 16) {
+            unsigned long imm_ul;
+            if (!has_arg) {
+              fprintf(stderr, "kasm: %s needs an immediate (line %u)\n", mnem, line_no);
+              rc = 5;
+              goto asm_done;
+            }
+            errno = 0;
+            imm_ul = strtoul(arg, &end, 0);
+            if (end == arg || *end) {
+              fprintf(stderr, "kasm: bad immediate for %s (line %u)\n", mnem, line_no);
+              rc = 5;
+              goto asm_done;
+            }
+            if (errno == ERANGE || imm_ul > 65535ul) {
+              fprintf(stderr, "kasm: immediate must be 0..65535 for imm16 (line %u)\n", line_no);
+              rc = 5;
+              goto asm_done;
+            }
+            if (!emit_u16le(&cur_sec->data, &cur_sec->data_len, (uint16_t)imm_ul)) {
+              rc = 4;
+              goto asm_done;
+            }
           } else if (ii->imm_bits == 64) {
             uint8_t *next;
             if (!has_arg) {

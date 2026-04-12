@@ -17,17 +17,17 @@ static int file_readable(const char *path) {
 static void print_kasm_usage(FILE *out) {
   fprintf(out, "usage: kasm [--isa <file.json>] --in <file.kasm> -o <out.oobj>\n");
   fprintf(out, "       kasm -h | --help\n");
-  fprintf(out, "ISA defaults to kasm/isa/x86_64_linux.json; search order:\n");
-  fprintf(out, "  $OLANG_TOOLCHAIN_ROOT/kasm/isa/x86_64_linux.json,\n");
+  fprintf(out, "ISA defaults to kasm/isa/x86_64.json; search order:\n");
+  fprintf(out, "  $OLANG_TOOLCHAIN_ROOT/kasm/isa/x86_64.json,\n");
   fprintf(out, "  cwd kasm/isa/..., cwd ../kasm/isa/..., <exe-dir>/../kasm/isa/...\n");
 }
 
 static int resolve_default_isa(char *out, size_t out_sz, const char *argv0) {
-  static const char *const rel[] = {"kasm/isa/x86_64_linux.json", "../kasm/isa/x86_64_linux.json"};
+  static const char *const rel[] = {"kasm/isa/x86_64.json", "../kasm/isa/x86_64.json"};
   const char *root = getenv("OLANG_TOOLCHAIN_ROOT");
   size_t k;
   if (root && root[0]) {
-    snprintf(out, out_sz, "%s/kasm/isa/x86_64_linux.json", root);
+    snprintf(out, out_sz, "%s/kasm/isa/x86_64.json", root);
     if (file_readable(out)) return 1;
   }
   for (k = 0; k < sizeof(rel) / sizeof(rel[0]); ++k) {
@@ -41,7 +41,7 @@ static int resolve_default_isa(char *out, size_t out_sz, const char *argv0) {
     slash = strrchr(dir, '/');
     if (slash) {
       *slash = '\0';
-      snprintf(out, out_sz, "%s/../kasm/isa/x86_64_linux.json", dir);
+      snprintf(out, out_sz, "%s/../kasm/isa/x86_64.json", dir);
       if (file_readable(out)) return 1;
     }
   }

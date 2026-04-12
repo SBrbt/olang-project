@@ -8,8 +8,8 @@ A statically typed systems programming language built from scratch.
 
 ```bash
 make all
-bash examples/olc -o examples/out/hello.elf examples/programs/ex_hello.ol
-./examples/out/hello.elf
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/ex_hello.ol
+./examples/linux_x86_64/out/hello.elf
 ```
 
 **[Get Started →](docs/README.md)**
@@ -46,7 +46,7 @@ Phase 1 (core features complete): type system, functions, structs, arrays, contr
 ├── kasm/          # Assembler
 ├── alinker/       # Linker
 ├── common/        # Shared code
-├── examples/      # Example programs
+├── examples/      # linux_x86_64 (olc, programs) and bare_x86_64 (link script)
 ├── tests/         # Test suite
 └── bin/           # Build output
 ```

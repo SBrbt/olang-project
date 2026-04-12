@@ -49,7 +49,7 @@ lib.ol ────> olang ──> lib.oobj ────┘
 
 #### kasm
 
-基于 `kasm/isa/x86_64_linux.json` 的汇编器：
+基于 `kasm/isa/x86_64.json` 的汇编器：
 - 两遍汇编
 - 支持标签、立即数、寄存器
 

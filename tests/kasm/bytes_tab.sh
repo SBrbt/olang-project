@@ -8,6 +8,6 @@ mkdir -p "$TMP"
 
 printf '.global _start\n_start:\n.bytes\tcc 90\n' > "$TMP/test.kasm"
 
-"$BIN" --isa "$ROOT/kasm/isa/x86_64_linux.json" --in "$TMP/test.kasm" -o "$TMP/out.oobj"
+"$BIN" --isa "$ROOT/kasm/isa/x86_64.json" --in "$TMP/test.kasm" -o "$TMP/out.oobj"
 rm -rf "$TMP"
 echo "OK: kasm_bytes_tab"

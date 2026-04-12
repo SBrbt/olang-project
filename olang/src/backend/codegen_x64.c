@@ -14,7 +14,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef INT32_MAX
+#define INT32_MAX 2147483647
+#endif
+#ifndef INT32_MIN
+#define INT32_MIN (-2147483647 - 1)
+#endif
+
 #define FRAME_SLOTS 256
+#define OL_CG_MAX_CUSTOM_SEC 32
+
+typedef struct {
+  char name[128];
+  uint8_t *data;
+  size_t len;
+} OlCgCustomSection;
 
 /* Bytes below saved rbx: slot s lives at rbp-8*(s+2); need sub rsp >= 8*num_slots, 16-byte aligned. */
 static int32_t frame_bytes_for_slot_count(int num_slots) {
@@ -36,6 +50,8 @@ typedef struct CG {
   size_t data_len;
   uint8_t *bss;
   size_t bss_len;
+  OlCgCustomSection custom_sec[OL_CG_MAX_CUSTOM_SEC];
+  size_t ncustom_sec;
   char err[256];
 
   int next_slot;
@@ -1464,6 +1480,12 @@ static int gen_expr(CG *g, OlExpr *e) {
       tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3); /* mov rax, rbx */
       {
         uint32_t ld = type_size_bytes(g->p, &e->ty);
+        /* Struct/array element: rax points at the element; keep address in slot (cf. aggregate OL_EX_VAR). */
+        if (cg_type_is_aggregate(g, &e->ty)) {
+          out = alloc_slot(g);
+          emit_mov_rbp_r64(g, out, 0);
+          return out;
+        }
         if (!emit_load_at_rax(g, ld)) {
           cg_err(g, "index load size");
           return -1;
@@ -2047,7 +2069,8 @@ typedef struct {
 } PendingAbs64;
 
 typedef struct {
-  int kind; /* -1 none, 0 .rodata, 1 .data, 2 .bss */
+  int kind; /* -1 none, 0 .rodata, 1 .data, 2 .bss, 3 custom */
+  char custom_sec_name[128]; /* if kind==3, for sym lookup after custom buffers freed */
   uint64_t off;
 } GlobLay;
 
@@ -2063,6 +2086,115 @@ static size_t align_sz(size_t x, size_t al) {
   return (x + al - 1u) / al * al;
 }
 
+static int cg_custom_sec_get(CG *g, const char *secname, char *err, size_t err_len) {
+  size_t k;
+  if (!secname || !secname[0]) {
+    snprintf(err, err_len, "custom section: empty name");
+    return -1;
+  }
+  for (k = 0; k < g->ncustom_sec; ++k) {
+    if (strcmp(g->custom_sec[k].name, secname) == 0) return (int)k;
+  }
+  if (g->ncustom_sec >= OL_CG_MAX_CUSTOM_SEC) {
+    snprintf(err, err_len, "too many distinct custom sections");
+    return -1;
+  }
+  k = g->ncustom_sec++;
+  snprintf(g->custom_sec[k].name, sizeof(g->custom_sec[k].name), "%s", secname);
+  g->custom_sec[k].data = NULL;
+  g->custom_sec[k].len = 0;
+  return (int)k;
+}
+
+static void cg_free_custom_sections(CG *g) {
+  size_t k;
+  for (k = 0; k < g->ncustom_sec; ++k) {
+    free(g->custom_sec[k].data);
+    g->custom_sec[k].data = NULL;
+    g->custom_sec[k].len = 0;
+  }
+  g->ncustom_sec = 0;
+}
+
+/* Append one initialized global to a writable blob (.data or a custom section). */
+static int emit_one_global_data_init(OlProgram *p, uint8_t **blob, size_t *blob_len, OlGlobalDef *gd, uint32_t sz, size_t al,
+                                     const char *sec_for_str_reloc, PendingAbs64 *abs64, size_t *n_abs64, size_t *out_off,
+                                     char *err, size_t err_len) {
+  size_t na = align_sz(*blob_len, al);
+  size_t pad = na - *blob_len;
+  uint8_t *nd;
+  size_t off;
+  (void)p;
+  if (pad) {
+    nd = (uint8_t *)realloc(*blob, *blob_len + pad);
+    if (!nd) {
+      snprintf(err, err_len, "oom data align");
+      return 0;
+    }
+    memset(nd + *blob_len, 0, pad);
+    *blob = nd;
+    *blob_len += pad;
+  }
+  off = *blob_len;
+  nd = (uint8_t *)realloc(*blob, *blob_len + (size_t)sz);
+  if (!nd) {
+    snprintf(err, err_len, "oom data global");
+    return 0;
+  }
+  *blob = nd;
+  memset(*blob + *blob_len, 0, (size_t)sz);
+  if (!gd->init) {
+    snprintf(err, err_len, "writable global needs initializer");
+    return 0;
+  }
+  if (gd->init->kind == OL_EX_INT || gd->init->kind == OL_EX_BOOL || gd->init->kind == OL_EX_CHAR) {
+    uint64_t v = 0;
+    if (gd->init->kind == OL_EX_INT)
+      v = (uint64_t)gd->init->u.int_.int_val;
+    else if (gd->init->kind == OL_EX_BOOL)
+      v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
+    else
+      v = (uint64_t)gd->init->u.char_val;
+    if (sz == 1u) (*blob)[*blob_len] = (uint8_t)v;
+    else if (sz == 2u) {
+      uint16_t u = (uint16_t)v;
+      memcpy(*blob + *blob_len, &u, 2);
+    } else if (sz == 4u) {
+      uint32_t u = (uint32_t)v;
+      memcpy(*blob + *blob_len, &u, 4);
+    } else {
+      memcpy(*blob + *blob_len, &v, 8);
+    }
+  } else if (gd->init->kind == OL_EX_FLOAT) {
+    if (sz == 8u) {
+      double d = gd->init->u.float_.float_val;
+      memcpy(*blob + *blob_len, &d, 8);
+    } else if (sz == 4u) {
+      float f = (float)gd->init->u.float_.float_val;
+      memcpy(*blob + *blob_len, &f, 4);
+    } else if (sz == 2u) {
+      uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val);
+      memcpy(*blob + *blob_len, &h, 2);
+    }
+  } else if (gd->init->kind == OL_EX_STR) {
+    OlStringLit *sl = &p->strings[gd->init->u.str_idx];
+    if (*n_abs64 >= 64) {
+      snprintf(err, err_len, "too many abs relocs");
+      return 0;
+    }
+    abs64[*n_abs64].off = (uint64_t)off;
+    snprintf(abs64[*n_abs64].sec, sizeof(abs64[*n_abs64].sec), "%s", sec_for_str_reloc);
+    snprintf(abs64[*n_abs64].sym, sizeof(abs64[*n_abs64].sym), "%s", sl->sym);
+    (*n_abs64)++;
+  } else {
+    snprintf(err, err_len, "bad data global init");
+    return 0;
+  }
+  *blob_len += (size_t)sz;
+  *out_off = off;
+  return 1;
+}
+
 static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, size_t *n_abs64, char *err, size_t err_len) {
   size_t i;
   for (i = 0; i < g->p->global_count; ++i) gl[i].kind = -1;
@@ -2070,8 +2202,7 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
     OlGlobalDef *gd = &g->p->globals[i];
     uint32_t sz = (gd->bitwidth + 7u) / 8u;
     size_t al = (sz >= 8u) ? 8u : ((sz >= 4u) ? 4u : 1u);
-    int use_ro = 0, use_data = 0, use_bss = 0;
-    const char *secname = ".data";
+    int use_ro = 0, use_data = 0, use_bss = 0, use_custom = 0;
 
     if (gd->section == OL_GSEC_RODATA)
       use_ro = 1;
@@ -2080,8 +2211,7 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
     else if (gd->section == OL_GSEC_BSS)
       use_bss = 1;
     else if (gd->section == OL_GSEC_CUSTOM) {
-      use_data = 1;
-      secname = ".data";
+      use_custom = 1;
     } else {
       if (!gd->init)
         use_bss = 1;
@@ -2171,64 +2301,23 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
       continue;
     }
 
+    if (use_custom) {
+      int cidx = cg_custom_sec_get(g, gd->custom_section, err, err_len);
+      size_t off = 0;
+      if (cidx < 0) return 0;
+      if (!emit_one_global_data_init(g->p, &g->custom_sec[(size_t)cidx].data, &g->custom_sec[(size_t)cidx].len, gd, sz, al,
+                                     gd->custom_section, abs64, n_abs64, &off, err, err_len))
+        return 0;
+      gl[i].kind = 3;
+      snprintf(gl[i].custom_sec_name, sizeof(gl[i].custom_sec_name), "%s", gd->custom_section);
+      gl[i].off = (uint64_t)off;
+      continue;
+    }
+
     if (use_data) {
-      size_t na = align_sz(g->data_len, al);
-      size_t pad = na - g->data_len;
-      uint8_t *nd;
-      size_t off;
-      if (pad) {
-        nd = (uint8_t *)realloc(g->data, g->data_len + pad);
-        if (!nd) {
-          snprintf(err, err_len, "oom data align");
-          return 0;
-        }
-        memset(nd + g->data_len, 0, pad);
-        g->data = nd;
-        g->data_len += pad;
-      }
-      off = g->data_len;
-      nd = (uint8_t *)realloc(g->data, g->data_len + (size_t)sz);
-      if (!nd) {
-        snprintf(err, err_len, "oom data global");
+      size_t off = 0;
+      if (!emit_one_global_data_init(g->p, &g->data, &g->data_len, gd, sz, al, ".data", abs64, n_abs64, &off, err, err_len))
         return 0;
-      }
-      g->data = nd;
-      memset(g->data + g->data_len, 0, (size_t)sz);
-      if (!gd->init) {
-        snprintf(err, err_len, ".data global needs initializer");
-        return 0;
-      }
-      if (gd->init->kind == OL_EX_INT || gd->init->kind == OL_EX_BOOL || gd->init->kind == OL_EX_CHAR) {
-        uint64_t v = 0;
-        if (gd->init->kind == OL_EX_INT)
-          v = (uint64_t)gd->init->u.int_.int_val;
-        else if (gd->init->kind == OL_EX_BOOL)
-          v = (uint64_t)(gd->init->u.bool_val ? 1u : 0u);
-        else
-          v = (uint64_t)gd->init->u.char_val;
-        if (sz == 1u) g->data[g->data_len] = (uint8_t)v;
-        else if (sz == 2u) { uint16_t u = (uint16_t)v; memcpy(g->data + g->data_len, &u, 2); }
-        else if (sz == 4u) { uint32_t u = (uint32_t)v; memcpy(g->data + g->data_len, &u, 4); }
-        else { memcpy(g->data + g->data_len, &v, 8); }
-      } else if (gd->init->kind == OL_EX_FLOAT) {
-        if (sz == 8u) { double d = gd->init->u.float_.float_val; memcpy(g->data + g->data_len, &d, 8); }
-        else if (sz == 4u) { float f = (float)gd->init->u.float_.float_val; memcpy(g->data + g->data_len, &f, 4); }
-        else if (sz == 2u) { uint16_t h = f32_to_f16_bits((float)gd->init->u.float_.float_val); memcpy(g->data + g->data_len, &h, 2); }
-      } else if (gd->init->kind == OL_EX_STR) {
-        OlStringLit *sl = &g->p->strings[gd->init->u.str_idx];
-        if (*n_abs64 >= 64) {
-          snprintf(err, err_len, "too many abs relocs");
-          return 0;
-        }
-        abs64[*n_abs64].off = (uint64_t)off;
-        snprintf(abs64[*n_abs64].sec, sizeof(abs64[*n_abs64].sec), "%s", secname);
-        snprintf(abs64[*n_abs64].sym, sizeof(abs64[*n_abs64].sym), "%s", sl->sym);
-        (*n_abs64)++;
-      } else {
-        snprintf(err, err_len, "bad data global init");
-        return 0;
-      }
-      g->data_len += (size_t)sz;
       gl[i].kind = 1;
       gl[i].off = (uint64_t)off;
     }
@@ -2272,6 +2361,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
   }
 
   if (!ol_codegen_x64_emit_globals(&g, gl, abs64, &n_abs64, err, err_len)) {
+    cg_free_custom_sections(&g);
     free(g.tx);
     free(g.ro);
     free(g.data);
@@ -2285,6 +2375,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
     size_t fstart = g.tx_len;
     if (!gen_function(&g, fn)) {
       snprintf(err, err_len, "codegen: %s", g.err[0] ? g.err : "failed");
+      cg_free_custom_sections(&g);
       free(g.tx);
       free(g.ro);
       free(g.data);
@@ -2294,6 +2385,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
     }
     if (!oobj_append_symbol(out, fn->link_name, 0, (uint64_t)fstart, fn->is_export ? 1 : 0)) {
       snprintf(err, err_len, "oom fn sym");
+      cg_free_custom_sections(&g);
       free(g.tx);
       free(g.ro);
       free(g.data);
@@ -2305,6 +2397,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
 
   if (!oobj_append_section(out, ".text", 16u, 5u, g.tx, g.tx_len)) {
     snprintf(err, err_len, "oom text section");
+    cg_free_custom_sections(&g);
     free(g.tx);
     free(g.ro);
     free(g.data);
@@ -2318,6 +2411,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
   if (g.ro_len > 0) {
     if (!oobj_append_section(out, ".rodata", 16u, 4u, g.ro, g.ro_len)) {
       snprintf(err, err_len, "oom rodata section");
+      cg_free_custom_sections(&g);
       free(g.ro);
       free(g.data);
       free(g.bss);
@@ -2331,6 +2425,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
   if (g.data_len > 0) {
     if (!oobj_append_section(out, ".data", 8u, 3u, g.data, g.data_len)) {
       snprintf(err, err_len, "oom data section");
+      cg_free_custom_sections(&g);
       free(g.data);
       free(g.bss);
       oobj_free(out);
@@ -2343,6 +2438,7 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
   if (g.bss_len > 0) {
     if (!oobj_append_section(out, ".bss", 8u, 3u, g.bss, g.bss_len)) {
       snprintf(err, err_len, "oom bss section");
+      cg_free_custom_sections(&g);
       free(g.bss);
       oobj_free(out);
       return 0;
@@ -2350,6 +2446,17 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
   }
   free(g.bss);
   g.bss = NULL;
+
+  for (i = 0; i < g.ncustom_sec; ++i) {
+    if (g.custom_sec[i].len == 0) continue;
+    if (!oobj_append_section(out, g.custom_sec[i].name, 8u, 3u, g.custom_sec[i].data, g.custom_sec[i].len)) {
+      snprintf(err, err_len, "oom custom section");
+      cg_free_custom_sections(&g);
+      oobj_free(out);
+      return 0;
+    }
+  }
+  cg_free_custom_sections(&g);
 
   ix_ro = sec_index_named(out, ".rodata");
   ix_data = sec_index_named(out, ".data");
@@ -2381,8 +2488,10 @@ int ol_codegen_x64(const OlTargetInfo *ti, OlProgram *program, OobjObject *out, 
       secix = ix_ro;
     } else if (gl[i].kind == 1) {
       secix = ix_data;
-    } else {
+    } else if (gl[i].kind == 2) {
       secix = ix_bss;
+    } else {
+      secix = sec_index_named(out, gl[i].custom_sec_name);
     }
     if (secix < 0) {
       snprintf(err, err_len, "internal: global section missing");
