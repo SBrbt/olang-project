@@ -905,6 +905,8 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
             return 0;
           }
         }
+        type_make_ref(&e->ty, &e->u.alloc_.init->ty);
+        return 1;
       }
       type_make_untyped_ref(&e->ty);
       return 1;
@@ -1032,7 +1034,7 @@ static int apply_alloc_expr_to_let_bindings(SemaCtx *S, OlLetBinding *bd, size_t
   return 0;
 }
 
-static int fill_let_binding_names_from_rhs(SemaCtx *S, OlStmt *s) {
+static int __attribute__((unused)) fill_let_binding_names_from_rhs(SemaCtx *S, OlStmt *s) {
   OlExpr *re = s->u.let_.ref_expr;
   OlLetBinding *bd = s->u.let_.bindings;
   size_t n = s->u.let_.binding_count;
@@ -1082,7 +1084,7 @@ static int fill_global_let_bindings(SemaCtx *S, OlGlobalDef *gd) {
 }
 
 /* let name1 ... let nameN rhs_ref: rhs must be a reference; innermost name is next to rhs. */
-static int check_let_ref_chain_views(SemaCtx *S, OlStmt *s) {
+static int __attribute__((unused)) check_let_ref_chain_views(SemaCtx *S, OlStmt *s) {
   OlExpr *cur;
   OlExpr *layers;
   OlExpr rb;
@@ -1157,58 +1159,23 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
       case OL_ST_LET: {
         OlExpr *re = s->u.let_.ref_expr;
         size_t bi;
-        uint32_t sum_bits = 0;
-        uint32_t bw;
-        OlExpr *init_e;
-        int is_aggregate = 0;
+        const OlTypeRef *elem_ty;
         if (!re) {
-          sema_err(S, s->line, "let requires stack[...] or a ref expression");
+          sema_err(S, s->line, "let requires a reference expression on the right");
           return 0;
         }
-        if (!fill_let_binding_names_from_rhs(S, s)) return 0;
-        if (re->kind == OL_EX_REF_BIND) {
-          if (s->u.let_.binding_count != 1) {
-            sema_err(S, s->line, "let with ref expression allows only one binding");
-            return 0;
-          }
-          if (re->u.ref_bind.to.kind != OL_TY_VOID &&
-              !type_eq(&re->u.ref_bind.to, &s->u.let_.bindings[0].ty)) {
-            sema_err(S, s->line, "let binding type must match inner (Type) ref");
-            return 0;
-          }
-          for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
-            if (lookup_global_type(S->prog, s->u.let_.bindings[bi].name)) {
-              sema_err(S, s->line, "let name shadows global");
-              return 0;
-            }
-            if (!type_is_valid(S->prog, &s->u.let_.bindings[bi].ty) || s->u.let_.bindings[bi].ty.kind == OL_TY_VOID) {
-              sema_err(S, s->line, "invalid let type");
-              return 0;
-            }
-          }
-          if (!resolve_expr(S, re)) return 0;
-          if (!bind_sym_indirect(S, s->u.let_.bindings[0].name, &s->u.let_.bindings[0].ty, 0)) {
-            sema_err(S, s->line, "duplicate let or oom");
-            return 0;
-          }
-          break;
-        }
-        if (re->kind == OL_EX_VAR) {
-          if (!check_let_ref_chain_views(S, s)) return 0;
-          break;
-        }
-        if (re->kind != OL_EX_ALLOC) {
-          sema_err(S, s->line, "local let requires stack[...] or <Type> ref (e.g. <i32>find[...])");
-          return 0;
-        }
-        if (re->u.alloc_.alloc != OL_ALLOC_STACK) {
-          sema_err(S, s->line, "local let must be stack[...]");
-          return 0;
-        }
-        bw = re->u.alloc_.bitwidth;
-        init_e = re->u.alloc_.init;
         if (s->u.let_.binding_count == 0 || s->u.let_.binding_count > OL_MAX_LET_BINDINGS) {
           sema_err(S, s->line, "invalid let binding count");
+          return 0;
+        }
+        if (!resolve_expr(S, re)) return 0;
+        if (!type_is_ref(&re->ty)) {
+          sema_err(S, s->line, "right side of let must be a reference");
+          return 0;
+        }
+        elem_ty = type_ref_elem(&re->ty);
+        if (!elem_ty) {
+          sema_err(S, s->line, "invalid reference on right side of let");
           return 0;
         }
         for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
@@ -1216,90 +1183,13 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
             sema_err(S, s->line, "let name shadows global");
             return 0;
           }
-          if (!s->u.let_.bindings[bi].has_ty) {
-            sema_err(S, s->line, "let: could not infer binding types from stack[...]");
-            return 0;
-          }
+          type_copy(&s->u.let_.bindings[bi].ty, elem_ty);
+          s->u.let_.bindings[bi].has_ty = 1;
           if (!type_is_valid(S->prog, &s->u.let_.bindings[bi].ty)) {
             sema_err(S, s->line, "invalid let type");
             return 0;
           }
-        }
-        {
-          OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
-          if (t0->kind == OL_TY_VOID) {
-            if (init_e) {
-              sema_err(S, s->line, "untyped stack placement cannot have an initializer; use a typed view or a separate let");
-              return 0;
-            }
-            sum_bits = bw;
-          } else {
-            if (t0->kind == OL_TY_ALIAS) {
-              int tdi = ol_program_find_typedef(S->prog, t0->alias_name);
-              if (tdi >= 0) {
-                OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
-                if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-                  is_aggregate = 1;
-                }
-              }
-            }
-            {
-              uint32_t b = ty_size_bytes(S->prog, t0) * 8u;
-              if (b == 0) {
-                sema_err(S, s->line, "let type has zero size");
-                return 0;
-              }
-              sum_bits = b;
-            }
-          }
-        }
-        if (sum_bits != bw) {
-          sema_err(S, s->line, "let type size must match stack bitwidth");
-          return 0;
-        }
-        if (s->u.let_.bindings[0].ty.kind == OL_TY_VOID) {
-          {
-            OlTypeRef v;
-            memset(&v, 0, sizeof(v));
-            v.kind = OL_TY_VOID;
-            if (!bind_sym(S, s->u.let_.bindings[0].name, &v, 0, 0)) {
-              sema_err(S, s->line, "duplicate let or oom");
-              return 0;
-            }
-          }
-        } else if (is_aggregate) {
-          OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
-          uint32_t expect_bits = ty_size_bytes(S->prog, t0) * 8u;
-          if (expect_bits != bw) {
-            sema_err(S, s->line, "let bitwidth does not match aggregate size");
-            return 0;
-          }
-          if (init_e) {
-            if (!resolve_expr(S, init_e)) return 0;
-            if (!type_eq(&init_e->ty, t0)) {
-              sema_err(S, s->line, "let type mismatch");
-              return 0;
-            }
-          }
-          if (!bind_sym(S, s->u.let_.bindings[0].name, t0, 0, 0)) {
-            sema_err(S, s->line, "duplicate let or oom");
-            return 0;
-          }
-        } else {
-          if (!init_e) {
-            sema_err(S, s->line, "scalar let requires initializer");
-            return 0;
-          }
-          if (!resolve_expr(S, init_e)) return 0;
-          if (ty_size_bytes(S->prog, &init_e->ty) * 8u != bw) {
-            sema_err(S, s->line, "initializer bit width must match let bitwidth");
-            return 0;
-          }
-          if (!type_eq(&init_e->ty, &s->u.let_.bindings[0].ty)) {
-            sema_err(S, s->line, "let type mismatch");
-            return 0;
-          }
-          if (!bind_sym(S, s->u.let_.bindings[0].name, &s->u.let_.bindings[0].ty, 0, 0)) {
+          if (!bind_sym_indirect(S, s->u.let_.bindings[bi].name, &s->u.let_.bindings[bi].ty, 0)) {
             sema_err(S, s->line, "duplicate let or oom");
             return 0;
           }

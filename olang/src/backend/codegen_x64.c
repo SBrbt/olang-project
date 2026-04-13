@@ -1435,133 +1435,21 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
       }
       case OL_ST_LET: {
         OlExpr *re = s->u.let_.ref_expr;
-        uint32_t bw;
-        uint32_t blob_bytes;
-        int num_slots;
-        int is_aggregate = 0;
-        int base_slot;
-        int ptr_slot;
-        OlTypeRef *t0;
-        uint32_t let_sz;
-        OlExpr *init_e;
-        if (re && re->kind == OL_EX_REF_BIND) {
-          int fs;
-          if (s->u.let_.binding_count != 1u) {
-            cg_err(g, "let with <...>ref allows only one binding");
-            return 0;
-          }
-          fs = gen_expr(g, re->u.ref_bind.inner);
-          if (fs < 0) return 0;
-          if (!bind_local_indirect(g, s->u.let_.bindings[0].name, fs, &s->u.let_.bindings[0].ty)) return 0;
-          break;
-        }
-        if (re && re->kind == OL_EX_VAR) {
-          OlExpr *cur = re;
-          OlExpr *layers;
-          OlExpr rb;
-          size_t n = s->u.let_.binding_count;
-          size_t i;
-          size_t idx;
-          if (n < 1u) {
-            cg_err(g, "let ref-chain has no bindings");
-            return 0;
-          }
-          layers = (OlExpr *)calloc(n, sizeof(OlExpr));
-          if (!layers) {
-            cg_err(g, "oom");
-            return 0;
-          }
-          for (i = n; i > 0u; --i) {
-            int fs;
-            idx = i - 1u;
-            memset(&rb, 0, sizeof(rb));
-            rb.kind = OL_EX_REF_BIND;
-            rb.line = s->line;
-            memcpy(&rb.u.ref_bind.to, &s->u.let_.bindings[idx].ty, sizeof(OlTypeRef));
-            rb.u.ref_bind.inner = cur;
-            fs = gen_expr(g, &rb);
-            if (fs < 0) {
-              free(layers);
-              return 0;
-            }
-            if (!bind_local_indirect(g, s->u.let_.bindings[idx].name, fs, &s->u.let_.bindings[idx].ty)) {
-              free(layers);
-              return 0;
-            }
-            memset(&layers[idx], 0, sizeof(OlExpr));
-            layers[idx].kind = OL_EX_VAR;
-            layers[idx].line = s->line;
-            snprintf(layers[idx].u.var_name, sizeof(layers[idx].u.var_name), "%s", s->u.let_.bindings[idx].name);
-            cur = &layers[idx];
-          }
-          free(layers);
-          break;
-        }
-        if (!re || re->kind != OL_EX_ALLOC) {
-          cg_err(g, "local let requires stack[...] or (Type)ref");
+        int fs;
+        size_t bi;
+        if (!re) {
+          cg_err(g, "let missing right-hand reference");
           return 0;
         }
-        if (re->u.alloc_.alloc != OL_ALLOC_STACK) {
-          cg_err(g, "local let must use stack[...] for stack storage");
+        if (s->u.let_.binding_count < 1u) {
+          cg_err(g, "let has no bindings");
           return 0;
         }
-        bw = re->u.alloc_.bitwidth;
-        init_e = re->u.alloc_.init;
-        blob_bytes = (bw + 7u) / 8u;
-        num_slots = (int)((blob_bytes + 7u) / 8u);
-        if (s->u.let_.binding_count != 1u) {
-          cg_err(g, "stack[...] let expects one name per placement");
-          return 0;
+        fs = gen_expr(g, re);
+        if (fs < 0) return 0;
+        for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
+          if (!bind_local_indirect(g, s->u.let_.bindings[bi].name, fs, &s->u.let_.bindings[bi].ty)) return 0;
         }
-        t0 = &s->u.let_.bindings[0].ty;
-        if (t0->kind == OL_TY_ALIAS) {
-          int tdi = ol_program_find_typedef(g->p, t0->alias_name);
-          if (tdi >= 0) {
-            OlTypeDefKind tdk = g->p->typedefs[(size_t)tdi].kind;
-            if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-              is_aggregate = 1;
-            }
-          }
-        }
-        if (is_aggregate) {
-          let_sz = type_size_bytes(g->p, t0);
-          num_slots = (int)((let_sz + 7u) / 8u);
-          {
-            int data_slot = alloc_slots(g, num_slots);
-            if (data_slot < 0) return 0;
-            ptr_slot = alloc_slot(g);
-            if (ptr_slot < 0) return 0;
-            {
-              int32_t d = slot_disp(data_slot);
-              uint8_t rex = 0x48;
-              uint8_t modrm;
-              if (d >= -128 && d <= 127) {
-                modrm = (uint8_t)(0x45u | (0u << 3u)); /* rax, [rbp+disp8] */
-                tx_copy(g, (uint8_t[]){rex, 0x8d, modrm, (uint8_t)(int8_t)d}, 4);
-              } else {
-                modrm = (uint8_t)(0x85u | (0u << 3u)); /* rax, [rbp+disp32] */
-                tx_copy(g, (uint8_t[]){rex, 0x8d, modrm}, 3);
-                tx_copy(g, (uint8_t *)&d, 4);
-              }
-              emit_mov_rbp_r64(g, ptr_slot, 0);
-            }
-            if (init_e) {
-              int rs = gen_expr(g, init_e);
-              if (rs < 0) return 0;
-              emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(data_slot, 0), &init_e->ty);
-            }
-          }
-          if (!bind_local(g, s->u.let_.bindings[0].name, ptr_slot, t0, 0u)) return 0;
-          break;
-        }
-        base_slot = alloc_slots(g, num_slots);
-        if (base_slot < 0) return 0;
-        if (init_e) {
-          int rs = gen_expr(g, init_e);
-          if (rs < 0) return 0;
-          emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &init_e->ty);
-        }
-        if (!bind_local(g, s->u.let_.bindings[0].name, base_slot, &s->u.let_.bindings[0].ty, 0)) return 0;
         break;
       }
       case OL_ST_STORE: {
