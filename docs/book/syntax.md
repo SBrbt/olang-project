@@ -139,6 +139,15 @@ let y bss[64];                         // .bss, untyped blob
 let z section[".mysec", 32, 0i32];     // custom section
 ```
 
+File-scope constraints (enforced by sema):
+
+- Global `let` right side must be `data` / `rodata` / `bss` / `section` (not `stack`, not general `RefExpr`).
+- In one global `let`, names must be unique and binding count must be valid.
+- If you split one global into multiple names, each view must be scalar and total view bit widths must sum to the declared bit width.
+- Untyped global placement (void element) allows only one name.
+- `bss[...]` cannot have an initializer.
+- `rodata[...]` initializers must be compile-time constants.
+
 #### Writes (no `=` assignment)
 
 There is **no** `Expr = Expr` statement. Writes use **`store`**:

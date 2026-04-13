@@ -85,11 +85,18 @@ See `ex_rt_multi_view.ol`.
 
 #### Top-level binding and file-scope storage
 
-It is still **`let`** *names* … with a **reference** on the right. Outside functions, use **`data`**, **`rodata`**, **`bss`**, or **`section`** instead of `stack`; names are **file scope**. Bracket rules match the **`stack`** section; details: [syntax reference](../book/syntax.md). Without an initializer, globals are often **untyped** blobs or use an initializer to fix scalar layout.
+It is still **`let`** *names* …, but at file scope the right side is restricted to global allocators: **`data`**, **`rodata`**, **`bss`**, or **`section`** (not `stack`, not general `RefExpr`). Names are **file scope**. Bracket rules match the **`stack`** section; details: [syntax reference](../book/syntax.md). Without an initializer, globals are often **untyped** blobs or use an initializer to fix scalar layout.
 
 ```olang
 let gcount data[32, 10];
 ```
+
+Practical global constraints:
+
+- Multi-name global views are scalar-only.
+- The sum of view sizes must match the declared global bit width.
+- `bss[...]` has no initializer.
+- `rodata[...]` initializer must be compile-time constant.
 
 More examples: `ex_rt_global_sections.ol`, `ex_rt_global_multi_view.ol`, `ex_rt_section_custom.ol`. Full rules: [syntax reference](../book/syntax.md) (“Variable binding”).
 

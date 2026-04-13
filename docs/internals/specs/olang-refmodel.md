@@ -18,7 +18,7 @@ This document specifies the **reference-centered** surface language targeted by 
 - **Reads/writes** use **`load[expr]`** / **`store[lvalue, Expr];`**. Assignment **`Expr = Expr`** is not supported.
 - **Value** conversions use **`T(expr)`** with a full expression inside **`()`** (no `cast` keyword) — only between **`iN`/`uN`/`bN`/`fN`** (family widen/narrow and int↔float); **not** to/from **`ptr`** or **`bool`**. Do not confuse with **`<Type> RefExpr`**, which does **not** convert a loaded value.
 - **`addr [ RefExpr ]`** is a **`ptr` rvalue** (a **`RefExpr`** form in the grammar); it does not allocate storage. Use it where a **`ptr`** **value** is needed (e.g. **`stack[64, addr[x]]`**); **typed** **`<T> …`** does **not** wrap **`addr[…]`**.
-- **Placement:** **`stack` / `data` / `rodata` / `section`** — **`[`** **bit width** **`,`** optional initializer **`]`**; **`bss`** — **`[`** bit width **`]`** only. The allocator expression is an **untyped** reference; the **`let`** binding’s element type comes from the **initializer**, or an **untyped** blob plus **`<T>`** view, or (file-scope scalars) an initializer on **`data`/`rodata`/…**. See [olang-syntax.md](olang-syntax.md).
+- **Placement:** inside functions, placement is **`stack`** with **`[`** bit width **`,`** optional initializer **`]`**. At file scope, placement is **`data` / `rodata` / `bss` / `section`**. `data` / `rodata` / `section` use **`[`** bit width **`,`** optional initializer **`]`**; `bss` is **`[`** bit width **`]`** only. The allocator expression is an **untyped** reference; the **`let`** binding’s element type comes from the **initializer**, or an untyped blob plus a later typed view (inside functions). See [olang-syntax.md](olang-syntax.md).
 - **`sizeof[Type]`** is a **compile-time** integer (bit width of `Type`).
 - **`addr [ … ]`** yields the address of the operand storage (**`ptr`**). Same-width **view** of existing storage: **`let n <T> x`** (**`x`** a **reference**), not **`addr[x]`** under **typed** **`<T>`**.
 - **Safety**: the language provides operations only; **no** alias or layout guarantees. **UB** is possible if the user misuses views.
@@ -40,10 +40,6 @@ RefExpr ::= ( RefExpr )
           | find [ Expr ]
           | addr [ RefExpr ]
           | stack [ … ]
-          | data [ Expr ]
-          | rodata [ Expr ]
-          | bss [ BitWidth ]
-          | section [ StrLit , Expr ]
           | < Type > RefExpr
           | Ident
 
@@ -68,7 +64,17 @@ LValue ::= Ident | Expr . Ident | Expr [ Expr ]
 
 ### Chained `let` (binding order)
 
-For `let b1 let b2 … let bN` `RefExpr`, the parser records bindings **left to right** (`b1` … `bN`). When `RefExpr` is a reference **name** (`Ident`), the semantic layer treats the **rightmost** binding (`bN`) as closest to that **`Ident`** and builds nested ref-views **outward** toward `b1` (see `check_let_ref_chain_views` in `sema.c`). When the tail is **`stack[…]`** or a global allocator, **one** name is bound per placement (no type list inside **`stack`**); use **`struct`** fields or **`<T>` / chain** for multiple views.
+For `let b1 let b2 … let bN` `RefExpr`, the parser records bindings **left to right** (`b1` … `bN`). In current semantic checking, the right side is first resolved as a reference; then each binding name is bound as an indirect alias of that same reference with the same element type. For placement allocators (`stack[…]` / global allocators), use one name per placement and additional aliases/views via later `let` statements.
+
+### Global `let` constraints (current sema)
+
+- Global `let` requires `AllocatorG` (`data` / `rodata` / `bss` / `section`), never `stack`.
+- Binding count must be in range 1..`OL_MAX_LET_BINDINGS`, and names in one global `let` must be unique.
+- For multi-name globals, only scalar views are allowed (no aggregate multi-view split).
+- If a global placement remains untyped (`void` element), only one name is allowed.
+- Sum of all binding view sizes must equal the declared allocator bit width.
+- `bss[...]` cannot have an initializer.
+- `rodata[...]` initializer must be a compile-time constant expression.
 
 ## Notes
 
