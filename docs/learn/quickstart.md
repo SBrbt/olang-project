@@ -34,7 +34,13 @@ make check
 
 ### First Program
 
-Create `hello.ol` in `examples/linux_x86_64/programs`:
+Create a local playground directory (ignored by git — see repo `.gitignore`) and put your source next to the ELF:
+
+```bash
+mkdir -p examples/linux_x86_64/programs/hello
+```
+
+Create `examples/linux_x86_64/programs/hello/hello.ol`:
 
 ```olang
 extern i32 main() {
@@ -42,15 +48,16 @@ extern i32 main() {
 }
 ```
 
-Compile and run:
+Compile and run from the repo root (output stays under `hello/`):
 
 ```bash
-mkdir -p examples/linux_x86_64/out
-bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/hello.ol
-./examples/linux_x86_64/out/hello.elf
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/programs/hello/hello.elf examples/linux_x86_64/programs/hello/hello.ol
+./examples/linux_x86_64/programs/hello/hello.elf
 echo $?
 # 42
 ```
+
+`make check` only compiles `examples/linux_x86_64/programs/ex_*.ol` by convention; this `hello/` tree is for your own experiments.
 
 ### Next Steps
 
@@ -68,6 +75,6 @@ Ensure you're in project root, use: `bash examples/linux_x86_64/olc`
 
 **Q: "scalar needs initializer"?**
 ```olang
-let x<i32> @stack<32>(0i32);  // ✓
-// let y<i32> @stack<32>();   // ✗ scalars must be initialized
+let x stack[32, 0i32];  // ✓
+// let y stack[32];     // ✗ need an initializer, or: let raw stack[32]; let y <i32> raw;
 ```

@@ -1,3 +1,6 @@
+# Local quickstart playground (see docs/learn/quickstart.md)
+examples/linux_x86_64/programs/hello/
+
 # Build output
 bin/
 examples/linux_x86_64/out/

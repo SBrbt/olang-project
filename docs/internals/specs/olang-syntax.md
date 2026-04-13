@@ -13,7 +13,7 @@
 - Top-level items:
   - `extern Type Ident ( ParamList ) ;` or `extern Type Ident ( ParamList ) Block`
   - `Type Ident ( ParamList ) Block` (internal function)
-  - Global `let`: **`let`** repeated per binding (see `LetBindings` below), then a **global** allocator `@data<…>`, `@bss<…>`, `@rodata<…>`, `@section("name")<…>` (**not** `@stack`)
+  - Global `let`: **`let`** repeated per binding (see `LetBindings` below), then a **global** placement — **`data[…]`**, **`rodata[…]`**, **`bss[…]`**, or **`section[…]`** (**not** `stack`, which is function-local)
   - `type` definitions (`struct` / `array`)
 - At least one function with a body is required.
 - **`extern` definitions** export symbols; functions without `extern` are TU-local. ELF entry is chosen by the **link script**, not the compiler.
@@ -23,10 +23,10 @@
 - **Whitespace**, **`//` comments**, **identifiers** (max 63 chars)
 - **Keywords**:
   - Control / decl: `extern`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
-  - Ops: `cast`, `find`, `load`, `store`, `addr`, `sizeof`
+  - Ops: `find`, `load`, `store`, `addr`, `sizeof`, `stack`, `data`, `bss`, `rodata`, `section`
   - Types / literals: `void`, `bool`, `ptr`, `true`, `false`, `i8` … `b64` (see [syntax.md](../../book/syntax.md))
-  - **Reserved:** `as` (keyword in the lexer; no `as` syntax in the parser yet)
 - **Literals**: int / float / bool / char / string (same as user doc)
+- **Comparisons / shifts**: `<`, `>`, `<=`, `>=`, `<<`, `>>` are tokenized as in C (no angle-bracket generics).
 
 ### Types
 
@@ -36,43 +36,49 @@ Type ::= void | bool | ptr | i8 | … | b64 | Ident
 
 ### Expressions (Expr)
 
-In `parse_expr`: `cast<T>(expr)` uses a full `expr`; also `sizeof<T>`, `load<Ident>`, `addr Ident`, **`find < Expr >`** (same form as in `RefExpr`; operand must be a `ptr` rvalue), literals, calls, field, index, unary/binary ops (see `parser.c`).
+In `parse_expr`: builtin **`T(expr)`** forms (`i32`, `f32`, …) for value casts; **`sizeof[Type]`**; **`load[expr]`**; **`addr [ RefExpr ]`** (expression type **`ptr`**); **`find[expr]`**; literals, calls, field, index, unary/binary ops (see `parser.c`).
 
 ### Reference expressions (RefExpr)
 
-Used as the tail of `let LetBindings` (`@…` or a `RefExpr`), and as the inner operand of `cast<T>(…)` **in ref position** (inner must be `RefExpr`, not any `expr`):
+Used as the tail of `let LetBindings` (**`stack` / `data` / …** or a `RefExpr`), including **`<Type> RefExpr`** (new reference with bound element type).
+
+Implementation note: `parser.c` composes **`parse_let_bindings`** with **`parse_alloc_expr`** or **`parse_ref_expr`**.
 
 ```
-LetNameTy ::= Ident < Type >
-            | Ident < >
-
-LetBindings ::= LetNameTy ( let LetNameTy )*
+LetBindings ::= LetBinding ( let LetBinding )*
+LetBinding ::= Ident                // element type from initializer, or untyped blob + `<T>` view
 
 RefExpr ::= ( RefExpr )
-          | find < Expr >
-          | addr Ident
-          | @ stack | data | bss | rodata | section ( StrLit ) < BitWidth > ( Expr? )
-          | < [Type] > RefExpr
-          | cast < Type > ( RefExpr )
+          | find [ Expr ]
+          | addr [ RefExpr ]
+          | stack [ BitWidthOptInit ]
+          | data [ BitWidthOptInit ]
+          | rodata [ BitWidthOptInit ]
+          | bss [ BitWidth ]
+          | section [ StrLit , BitWidthOptInit ]
+          | < Type > RefExpr
           | Ident
 
-BitWidth ::= IntLit | sizeof < Type >
+BitWidth ::= DecIntLit            // unsuffixed positive decimal integer; bit count
+BitWidthOptInit ::= BitWidth [ , Expr ]
 ```
 
-Plus the **`T<RefExpr>`** form where **`T`** is a builtin type keyword other than `void` (see `is_T_angle_conv_starter` in `parser.c`); it is parsed as part of `RefExpr`, not shown as a separate line above to avoid duplicating the keyword list.
-
-- Only `@stack` inside functions; no `@stack` at file scope.
-- `<void>` means no static type attached (inner must be a `ptr` view).
-- **`Ident`**: must resolve to **ref**-typed storage in sema (enables `let a<T> let b<U> rhsName` where `rhsName` is an existing reference).
-- **Builtin `Type` `<` `RefExpr` `>`**: same-angle closing rule as in `parse_ref_expr` (`is_T_angle_conv_starter`; `void` is excluded).
-- **`find < Expr >`**: `Expr` must have type **`ptr`** (a ptr rvalue); the result is a **compile-time reference to a memory object** (the usual lowering evaluates `Expr` in place). **`find<>`** is invalid. **Nesting `find<find<…>>`** is invalid. Inside `find<…>`, a comparison that uses **`>`** at the top level must parenthesize the comparison (e.g. `find<(a > b)>`) so the closing `>` of `find<…>` is not ambiguous.
+- **Placement expressions** (`stack` / `data` / `rodata` / `section`) have type **untyped reference** (`ref` with **void** element) after sema; the **`let`** name gets its element type from the **initializer**, or remains **untyped** until **`let v <T> raw`**, or (file-scope scalars) from an initializer on **`data`/`rodata`/… .
+- **Stack / data / rodata (functions use `stack`; globals use `data` / `rodata`):** **`[`** **bit width** **`,`** optional **initializer** **`]`**. Bit width is an **unsuffixed** decimal integer literal (bits). Initializer omitted ⇒ **untyped** blob (locals: add **`<T>`**; globals: use **`bss[`** *width* **`]`** or **`data`** with an initializer if a typed scalar is needed at file scope).
+- **`bss`:** **`bss[`** **bit width** **`]`** only — no second argument, no initializer.
+- **`section`:** **`section[`** string **`,`** **bit width** **`,`** optional initializer **`]`** (same width/init rules as `data`).
+- **No** comma-separated **view type list** inside allocators — use **`let a let b (x)`** (chain), **struct** fields, or **`let n <T>x`**.
+- **`< Type > inner`**: introduces a **new** reference (or a **`ptr`** view when **`Type`** is **`void`**). Not `T(expr)` value cast. **Sema** requires **`inner`** to be a **reference** (typed or untyped), **never** **`ptr`** — so not **`addr[…]`**. **`addr [ … ]`** is a **`RefExpr`** form but types as **`ptr`**.
+- Only **`stack`** inside functions for stack slots; at file scope use **`data` / `bss` / `rodata` / `section`** (not **`stack`**).
+- **`Ident`**: must resolve to **ref**-typed storage in sema (enables `let a let b rhsName`).
+- **`addr [ RefExpr ]`**: **`RefExpr`** in the grammar; expression type **`ptr`**. **Sema** currently requires the inner **`RefExpr`** to be a simple name (**`OL_EX_VAR`**); see **`OL_EX_ADDR`** in **`sema.c`**.
 
 ### Statements
 
 ```
 Stmt ::= Block
-       | let LetBindings ( @stack < BitWidth > ( Expr? ) | RefExpr ) ;
-       | store < LValue , Expr > ;
+       | let LetBindings RefExpr ;
+       | store [ LValue , Expr ] ;
        | if ( Expr ) Stmt [ else Stmt ]
        | while ( Expr ) Stmt
        | break ;
@@ -83,17 +89,16 @@ Stmt ::= Block
 LValue ::= Ident | Expr . Ident | Expr [ Expr ]
 ```
 
-- **No** assignment statement **`Expr = Expr`**; use **`store<…>`** (see ref model).
-- **`let`**: `LetBindings` as above — **each** additional `Ident<Type>` is prefixed by **`let`** (legacy `let x<T> y<U>` without `let` between names is rejected). Then either `@stack<…>(…)` or a single `RefExpr`. No `from` keyword. Chaining order vs. nested ref-views: see [olang-refmodel.md](olang-refmodel.md) § “Chained `let`”.
-- **`store<…>`**: inside angle brackets: lvalue, comma, value expression, then `>`; value parsing uses a shallow expression layer (see `parse_shift`).
+- **No** assignment statement **`Expr = Expr`**; use **`store[lhs, rhs];`**.
+- **`let`**: `LetBindings` then **`RefExpr`** or a **`stack` / `data` / …** placement form. No `from` keyword.
 
 ### Top-level (continued)
 
 ```
-AllocatorG ::= @data < BitWidth > ( Expr? )
-             | @bss < BitWidth > ( )
-             | @rodata < BitWidth > ( Expr )
-             | @section ( StrLit ) < BitWidth > ( Expr? )
+AllocatorG ::= data [ BitWidthOptInit ]
+             | rodata [ BitWidthOptInit ]
+             | bss [ BitWidth ]
+             | section [ StrLit , BitWidthOptInit ]
 
 TopLevel ::= … | let LetBindings AllocatorG ;
 ```
@@ -101,12 +106,12 @@ TopLevel ::= … | let LetBindings AllocatorG ;
 ### Limitations
 
 - Up to 8 register parameters; rest on stack.
-- Multi-binding `let`, scalar vs aggregate, init rules: see [syntax.md](../../book/syntax.md).
+- Chained `let` over a reference name, `stack[…]` placement (one name per placement), scalar vs aggregate, init rules: see [syntax.md](../../book/syntax.md).
 - No compound assignment; no `++`/`--`.
 
 ### Values and storage
 
-- `load`, `addr`, literals are **values**. Named storage comes from `let` + allocators.
+- `load`, `addr`, literals are **values**. Named storage comes from `let` + **`stack` / `data` / …** placement.
 - Spilling subexpressions to slots is an implementation detail.
 
 ---

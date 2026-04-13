@@ -47,6 +47,9 @@ static void free_expr(OlExpr *e) {
       free_expr(e->u.index_.arr);
       free_expr(e->u.index_.index_expr);
       break;
+    case OL_EX_ADDR:
+      free_expr(e->u.addr.inner);
+      break;
     default:
       break;
   }

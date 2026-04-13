@@ -31,13 +31,22 @@ extern i32 main() {
 
 Top-level elements:
 - `type` — type definitions
-- `let` — global variables
+- `let` — **symbol → reference**: after **`let`** comes the **name** (you may chain several `let`s); the name is bound to the **reference** produced on the **right**. **`let` is not a type specifier.** A reference may have an **element type** or be **untyped** (no static element type yet—e.g. raw `stack[…]` / `find[…]`, then **`<T>…`** views). At **file scope** with a global placement, names are **file scope**; **inside a function**, they are **locals**.
 - `Ret name(...)` — internal functions (file-private; return type `Ret` first)
 - `extern Ret name(...)` — exported definitions or forward declarations (linkable)
 
 ---
 
 ### Variables and Types
+
+In the usual form, **`let`** *name* is enough: the **right-hand side is a reference** (e.g. **`stack[…]`**). The **`let`** keyword **does not carry a type**; the binding segment lists **identifiers only**, and the element type comes from the **initializer** or a later **`<T>`** view (e.g. **`let v <T> raw`**).
+
+For **`let`** + **`stack[…]`**:
+
+1. **With initializer:** **`let`** *name* **`stack[`** *bit width* **`,`** *initializer* **`];`** — element type comes **only** from the initializer.
+2. **Without initializer:** **`let`** *raw* **`stack[`** *bit width* **`];`** gives **untyped** storage, then **`let`** *view* **`<`** *Type* **`>`** *raw* for a typed reference, e.g. **`let raw stack[128];`** / **`let s <Pair> raw;`** (see `ex_rt_multi_view.ol`). At **file scope**, only allocators are allowed after **`let`** — not **`let v <T> x`** — so use an initializer to fix scalar layout (e.g. **`data[64, 0i64]`**) when needed.
+
+Inside **`[`** **`]`**: first item is always **bit width**; second is either an initializer or omitted (omitted ⇒ untyped blob, then **`<T>`** or **`store`**).
 
 #### Scalar Types (must be initialized)
 
@@ -52,41 +61,34 @@ Top-level elements:
 | `ptr` | 8 bytes | pointer |
 
 ```olang
-let x<i32> @stack<32>(42i32);
-let y<i64> @stack<64>(100i64);
-let z<i32> @stack<32>(50);  // unsuffixed decimal literal is i32
+let x stack[32, 42i32];
+let y stack[64, 100i64];
+let z stack[32, 50];  // unsuffixed decimal literal is i32; first arg is bit width
 ```
 
-#### Multi-binding on `@stack`
+#### Several names over one piece of storage
 
-You can declare **several names** on **one** stack blob: list `(Ident<Type>)+`, then `@stack<TOTAL_BITS>(initializer)` (no `from` keyword).
+Each **`stack[…]`** introduces **one** `let` name — **no** list of view types inside **`stack`**.
 
-- The **sum** of all bindings’ sizes (in bits) must equal `TOTAL_BITS`.
-- With **multiple names**, write **`let` before each `Ident<Type>`** (e.g. `let x<f32> let n<i32> @stack<64>(...)`). Each binding must be a **scalar** (not struct/array). Bindings may use **different** scalar types (e.g. `f32` and `i32` in one blob). One initializer expression supplies the bits (often a single integer literal whose pattern covers all slots).
-- Layout is a **tight pack** in declaration order (first field at the low-address end of the blob).
+- **Aliases / views on an existing ref:** **`let a let b (x)`** — **`x`** is a reference on the right; see `ex_rt_chain_let.ol`.
+- **Multiple fields in one layout:** define a **`struct`**, then **`let raw stack[`** *width* **`];`** + **`let s <Typedef> raw`** (see `ex_rt_multi_view.ol`).
 
 ```olang
-// Low 32 bits: 1.0f32; high 32 bits: 42i32 (little-endian u64 pattern)
-let x<f32> let n<i32> @stack<64>(0x0000002A3F800000u64);
-// float math on `x`, integer math on `n`; store<x, …> rewrites only the low half
+type Pack = struct { x: f32, n: i32 };
+let s_raw stack[64];
+let s <Pack> s_raw;
+store[s.x, 1.0f32];
+store[s.n, 42i32];
 ```
 
 See `ex_rt_multi_view.ol`.
 
-#### File-scope `let` (globals)
+#### Top-level binding and file-scope storage
 
-Outside functions, use `@data`, `@bss`, `@rodata`, or `@section("…")` instead of `@stack`. The same multi-binding shape applies: `(Ident<Type>)+` then `@allocator<TOTAL_BITS>(...)`.
-
-- **`@data`** — writable `.data`, must have an initializer (unless your workflow uses only `@bss` / `@rodata` rules below).
-- **`@bss`** — writable `.bss`, **no** initializer (zero-filled at load time).
-- **`@rodata`** — read-only; initializer must be a constant.
-- **`@section("name")`** — place the blob in a custom section (link script must mention it if you rely on layout).
-
-When there are **several names** on one global blob, they behave like stack multi-binding: **only scalars**, total bits must match. When there is **a single** binding, it may be an **aggregate** (struct or array); the **first** name is the **linker symbol** for the whole object, other names are alternate views/offsets into it.
+It is still **`let`** *names* … with a **reference** on the right. Outside functions, use **`data`**, **`rodata`**, **`bss`**, or **`section`** instead of `stack`; names are **file scope**. Bracket rules match the **`stack`** section; details: [syntax reference](../book/syntax.md). Without an initializer, globals are often **untyped** blobs or use an initializer to fix scalar layout.
 
 ```olang
-let gcount<i32> @data<32>(10);
-let gx<f32> let gn<i32> @data<64>(0x0000002A3F800000u64);
+let gcount data[32, 10];
 ```
 
 More examples: `ex_rt_global_sections.ol`, `ex_rt_global_multi_view.ol`, `ex_rt_section_custom.ol`. Full rules: [syntax reference](../book/syntax.md) (“Variable binding”).
@@ -95,35 +97,40 @@ More examples: `ex_rt_global_sections.ol`, `ex_rt_global_multi_view.ol`, `ex_rt_
 
 ```olang
 type Point = struct { x: i32, y: i32 };
-let p<Point> @stack<64>();  // no immediate initialization needed
-store<p.x, 10i32>;
-store<p.y, 20i32>;
+let p_raw stack[64];
+let p <Point> p_raw;
+store[p.x, 10i32];
+store[p.y, 20i32];
 ```
 
 #### Writes (`store`) and Value Copy
 
 ```olang
-let a<i32> @stack<32>(0i32);
-store<a, a + 1i32>;  // update storage
+let a stack[32, 0i32];
+store[a, a + 1i32];  // update storage
+```
 
+```olang
 type Pair = struct { a: i64, b: i64 };
-let x<Pair> @stack<128>();
-store<x.a, 1i64>;
-store<x.b, 2i64>;
-let y<Pair> @stack<128>();
-store<y, x>;         // value copy: y gets an independent copy
-store<x.b, 9i64>;    // does not affect y
+let x_raw stack[128];
+let x <Pair> x_raw;
+store[x.a, 1i64];
+store[x.b, 2i64];
+let y_raw stack[128];
+let y <Pair> y_raw;
+store[y, x];         // value copy: y gets an independent copy
+store[x.b, 9i64];    // does not affect y
 ```
 
 #### Type Casting
 
 ```olang
-cast<i32>(value)              // explicit cast (allowed conversions only)
-cast<ptr>(0x1000u64)          // same-width value (literal / non-variable expr)
-let u<u32> <u32>addr x;         // another name, same bytes: wrap `addr` in `<T>` (or multi-bind in one let)
+i32(value)                    // i/u/b/f families and int↔float only; no ptr/bool
+f32(3i32)
+let u <u32>x;            // `u` is a new ref (element type u32) to the same bytes as `x`
 ```
 
-Same-width view example: `ex_rt_u32_view.ol`.
+Same-width storage reinterpret: **`let n <T>x`** (see `ex_rt_u32_view.ol`), not `T(expr)` on a bare name.
 
 ---
 
@@ -142,9 +149,9 @@ if (x < 0i32) {
 #### while
 
 ```olang
-let i<i32> @stack<32>(0i32);
+let i stack[32, 0i32];
 while (i < 10i32) {
-    store<i, i + 1i32>;
+    store[i, i + 1i32];
 }
 ```
 
@@ -195,15 +202,17 @@ i32 factorial(n: i32) {
 type Point = struct { x: i32, y: i32 };
 type Rect = struct { tl: Point, br: Point };
 
-let r<Rect> @stack<128>();
-store<r.tl.x, 0i32>;  // nested field writes
-store<r.br.x, 10i32>;
+let r_raw stack[128];
+let r <Rect> r_raw;   // two Point fields
+store[r.tl.x, 0i32];  // nested field writes
+store[r.br.x, 10i32];
 
 // Aggregate field writes (whole-struct value copy)
-let p<Point> @stack<64>();
-store<p.x, 1i32>;
-store<p.y, 2i32>;
-store<r.tl, p>;  // copies entire Point
+let p_raw stack[64];
+let p <Point> p_raw;
+store[p.x, 1i32];
+store[p.y, 2i32];
+store[r.tl, p];  // copies entire Point
 ```
 
 ---
@@ -211,11 +220,12 @@ store<r.tl, p>;  // copies entire Point
 ### Arrays
 
 ```olang
-type Int5 = array<i32, 5>;
+type Int5 = array(i32, 5);
 
-let arr<Int5> @stack<160>();
-store<arr[0], 10i32>;
-store<arr[1], 20i32>;
+let arr_raw stack[160];   // 5 × i32 → 160 bits
+let arr <Int5> arr_raw;
+store[arr[0], 10i32];
+store[arr[1], 20i32];
 
 i32 sum(a: Int5) {  // passes pointer
     return a[0] + a[1];
@@ -230,15 +240,16 @@ i32 sum(a: Int5) {  // passes pointer
 
 ```olang
 // Address-of
-let x<i32> @stack<32>(42i32);
-let p<ptr> @stack<64>(addr x);
+let x stack[32, 42i32];
+let p stack[64, addr[x]];
 
-// After `find<p>`, load/store the binding name (same storage as `x`)
-let v<i32> <i32>(find<p>);
-store<v, 100i32>;
+// `find[Expr]` requires `Expr` to have type `ptr`. Here `p` holds a `ptr`; use `load[p]` to get that value.
+// In `let`, use `<T>find[...]` for a typed reference view (not `(i32)(...)`; value conversion is `i32(expr)`).
+let v <i32>(find[load[p]]);
+store[v, 100i32];
 
-// String literal
-let s<ptr> @stack<64>(addr "Hello\n");
+// String literal (`ptr`-sized slot)
+let s stack[64, "Hello\n"];
 ```
 
 #### System Call Example
@@ -246,10 +257,10 @@ let s<ptr> @stack<64>(addr "Hello\n");
 Uses `posix_write` from the kasm POSIX shim (`libposix.kasm`):
 
 ```olang
-extern i64 posix_write(fd: i64, buf: ptr, n: i64);
+extern i64 posix_write(fd: i32, buf: ptr, n: u64);
 
 extern i32 main() {
-    posix_write(1i64, "Hello from OLang!\n", 18i64);
+    posix_write(1i32, "Hello from OLang!\n", 18u64);
     return 0;
 }
 ```

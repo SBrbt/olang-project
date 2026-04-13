@@ -39,7 +39,7 @@ kasm/
 { "mnemonic": "mov_rdi_r12", "bytes": "4c89e7", "imm_bits": 0 }
 ```
 
-未收录的编码在源码里用 `.bytes` 手写。
+ISA 里未收录的编码仍用 `.bytes` 手写。仓库自带的 `x86_64.json` 已包含 `examples/linux_x86_64/asm/runtime/olrt.kasm` 等用到的固定编码（如 `movzx_eax_ax`、`shr_ecx_imm8`、带立即数字节位移的 `je_rel8`、`or_eax_imm32` 等）。
 
 ### 汇编方式
 

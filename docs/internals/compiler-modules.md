@@ -36,7 +36,7 @@ Parser should **not** assign stack slots, global addresses, or emit code. It may
 
 - **Input**: `OlProgram` from parsing
 - **Output**: semantically valid program or diagnostics; fills in types, checks operations, resolves names to bindings.
-- **Owns**: scopes, `SymSlot` / indirect bindings, layout for locals and file-level multi-views, call arity, cast legality.
+- **Owns**: scopes, `SymSlot` / indirect bindings, storage layout for locals and globals (structs, allocators), call arity, cast legality.
 
 Semantic analysis is the right place for **type compatibility** and **binding rules**. It should not emit machine instructions; it informs the backend via the decorated program and consistent layout conventions documented in code comments.
 

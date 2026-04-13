@@ -47,7 +47,7 @@ type Rect = struct { tl: Point, br: Point };
 #### Array
 
 ```olang
-type IntArray = array<i32, 10>;
+type IntArray = array(i32, 10);
 ```
 
 - Size fixed at compile time
@@ -56,25 +56,24 @@ type IntArray = array<i32, 10>;
 
 ### Type Casting
 
-#### `cast<DestType>(expr)`
+#### Builtin `DestType(expr)` (value position)
 
-Explicit conversions the compiler allows between **different** types: widening/narrowing within the same integer family (`i*`↔`i*`, `u*`↔`u*`), `b*`↔`b*`, `f*`↔`f*`, `bool`↔integers, and float↔integer conversions. For **same-width** scalar rebinding of a **computed** value, `cast` is allowed (e.g. `cast<u32>(x + 1i32)`). You **cannot** apply `cast` to a **bare variable** for same-width rebinding—use **`let n<T> <T>addr x`** or multi-binding `let` (see below).
+There is no `cast` keyword. **`T(expr)`** (value position) only converts between the builtin families **`iN`**, **`uN`**, **`bN`**, and **`fN`**: widening/narrowing within each family (`i*`↔`i*`, `u*`↔`u*`, `b*`↔`b*`, `f*`↔`f*`), and **`uN`/`iN` ↔ `fN`**. There is **no** value cast **to or from** **`ptr`** or **`bool`** (use comparisons, control flow, or ref views). **Same-width** reinterpret between different families (e.g. `i32` vs `u32`, or integer vs `bN` at the same size) is **not** a value cast—use **`let n <T>x`** / chained **`let`** on references. You **cannot** apply **`T(x)`** to a **bare variable** for same-width rebinding—use **`let n <T>x`** (type on the **RefExpr** tail), **`let a let b x`**, or **`struct`** fields (see [syntax](syntax.md)).
 
 ```olang
-cast<i32>(i64_value)   // narrow
-cast<i32>(i8_value)    // widen
-cast<u32>(200u8)       // unsigned widen
-cast<u32>(x + 0i32)    // same-width value cast (expression, not a plain variable)
+i32(i64_value)   // narrow
+i32(i8_value)    // widen
+u32(200u8)       // unsigned widen
+f32(3i32)        // int to float (including same total width as i32)
 ```
 
 #### Same-width **storage** views: `addr` + `<T>`
 
-Use **`let n<T> <T>addr x`** to introduce another name as an indirect view of the same bytes (`addr` yields `ptr`, the outer `<T>` sets the element type). Alternatively, chain **`let`** before each `Ident<Type>` to share one allocation (e.g. `let x<f32> let n<i32> @stack<64>(...)`).
+Use **`let n <T>x`** so **`n`** names a **new** reference whose element type is **`T`**, referring to the same bytes as **`addr[x]`** (`addr` yields `ptr`). For several names over one blob, use **`let a let b rhsRef`** or **`struct`** fields — not a type list inside **`stack[...]`**.
 
 ```olang
-let x<i32> @stack<32>(-1);
-let u<u32> <u32>addr x;   // same 4 bytes as `x`, name `u`
-// cast<ptr>(0x1000u64)           // same-width value: literal / non-variable expr
+let x stack[32, -1];
+let u <u32>x;   // same 4 bytes as `x`, name `u`
 ```
 
 ### Type Categories

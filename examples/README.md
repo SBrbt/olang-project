@@ -35,7 +35,7 @@ Exit codes and stdout checks are defined in [`tests/olang/run_programs_olc.sh`](
 ### Robustness tests (`ex_rt_*`)
 
 - Prefix **`ex_rt_`**: compiler/backend regression scenarios.
-- Default **`return cast<i32>(0)`** means pass.
+- Default **`return i32(0)`** means pass.
 
 Adding a new `ex_*.ol` under `linux_x86_64/programs/` is picked up automatically; edit `tests/olang/run_programs_olc.sh` for custom stdout/exit assertions.
 

@@ -1,30 +1,34 @@
 #!/usr/bin/env bash
-# Expect olang to reject fail_long_ident.ol (identifier length).
+# Every tests/olang/olang_fail/fail_*.ol must be rejected by olang (non-zero exit).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export OLANG_TOOLCHAIN_ROOT="$ROOT"
 OLANG="$ROOT/bin/olang"
+FAIL_DIR="$ROOT/tests/olang/olang_fail"
 TMP="$ROOT/tests/fixtures/fail_tmp.oobj"
 mkdir -p "$(dirname "$TMP")"
-set +e
-"$OLANG" --target x86_64 --in "$ROOT/tests/olang/olang_fail/fail_long_ident.ol" -o "$TMP" 2>/dev/null
-code=$?
-set -e
-if [[ "$code" -eq 0 ]]; then
-  echo "check_olang_bounds: expected olang failure on long identifier" >&2
+
+shopt -s nullglob
+files=("$FAIL_DIR"/fail_*.ol)
+shopt -u nullglob
+
+if [[ ${#files[@]} -eq 0 ]]; then
+  echo "check_olang_bounds: no $FAIL_DIR/fail_*.ol" >&2
   exit 1
 fi
-echo "OK: tests/olang/olang_fail/fail_long_ident.ol (expected compile failure)"
 
-TMP2="$ROOT/tests/fixtures/fail_tmp2.oobj"
-set +e
-"$OLANG" --target x86_64 --in "$ROOT/tests/olang/olang_fail/fail_unterminated_string.ol" -o "$TMP2" 2>/dev/null
-code2=$?
-set -e
-if [[ "$code2" -eq 0 ]]; then
-  echo "check_olang_bounds: expected olang failure on unterminated string" >&2
-  exit 1
-fi
-echo "OK: tests/olang/olang_fail/fail_unterminated_string.ol (expected compile failure)"
+n=0
+for f in "${files[@]}"; do
+  set +e
+  "$OLANG" --target x86_64 --in "$f" -o "$TMP"
+  code=$?
+  set -e
+  if [[ "$code" -eq 0 ]]; then
+    echo "check_olang_bounds: expected olang failure for $f" >&2
+    exit 1
+  fi
+  echo "OK: $f (expected compile failure)"
+  n=$((n + 1))
+done
 
-echo "OK: check_olang_bounds.sh (2 cases)"
+echo "OK: check_olang_bounds.sh ($n cases)"

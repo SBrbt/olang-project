@@ -10,6 +10,7 @@
 static void print_olang_usage(FILE *out) {
   fprintf(out, "usage: olang --target <name> --in <file.ol> -o <out.oobj>\n");
   fprintf(out, "       olang -h | --help\n");
+  fprintf(out, "supported targets: x86_64\n");
 }
 
 int main(int argc, char **argv) {

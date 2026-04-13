@@ -39,7 +39,7 @@ Example:
 { "mnemonic": "mov_rdi_r12", "bytes": "4c89e7", "imm_bits": 0 }
 ```
 
-Anything not listed must use `.bytes` in the source.
+Encodings not listed in the ISA must use `.bytes`. The bundled `x86_64.json` includes additional fixed encodings used by `examples/linux_x86_64/asm/runtime/olrt.kasm` (e.g. `movzx_eax_ax`, `shr_ecx_imm8`, `je_rel8` with a numeric displacement byte, `or_eax_imm32`).
 
 ### Assembly model
 

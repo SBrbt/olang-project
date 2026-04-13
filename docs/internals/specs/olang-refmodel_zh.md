@@ -2,56 +2,80 @@
 
 **[English](olang-refmodel.md)** | **中文**
 
-本文描述 `olang` 重写所面向的**以引用为中心**的表面语言；**「已移除」**一节中的旧形式解析器**不得**再接受。
+本文描述 `olang` 编译器面向的**以引用为中心**的表面语言。完整文法见 [olang-syntax_zh.md](olang-syntax_zh.md)。
 
 ## 核心概念
 
-- **符号**把**名字**绑定到一条**引用**（编译期位置 + 可选的静态类型绑定）。
-- **`ptr`** 只表示地址类型，不带元素类型。
-- **类型绑定** `<[Type]> RefExpr` 产生**新引用**，与操作数引用**独立**；不附加静态类型时写 `<void>`（仍为 ptr 视图）。
-- **`find<Expr>`**：**`Expr`** 须求值为 **`ptr` 右值**；结果为**编译期对内存对象的引用**（实现上与其它子表达式一样对 `Expr` 求值）。**禁止嵌套 `find`**。误用地址/对象与其它视图一样可导致 **UB**。
-- **读写**用 **`load<name>`** / **`store<name, Expr>;`**，**不使用** **`=`** 赋值。
-- **`cast<Type>`**（唯一 cast 形态，如 `cast<Type>(RefExpr)`）**创建新对象**，结果为**带 `Type` 的引用**；旧 **`cast<T>(expr)` 右值转换**已**完全移除**。
-- **`addr Ident`** 为 **`ptr` 右值**，不分配存储。
-- **`@…<bits>(Expr)`** 分配存储，结果为绑定为 **`ptr`**、指向该块的引用。
-- **`sizeof<Type>`** 为**编译期**整数（类型的**位宽**）。
-- **`addr Ident`** 得到具名存储的地址（`ptr`）；与同宽 **`let n<T> <T>addr x`**、多绑定 `let` 配合得到同一段字节的另一类型视图。
-- **安全**：语言只提供操作；**不保证**别名与布局，误用可导致 **UB**。
+### `let`、右侧与 `<Type>`
 
-## 已移除（须拒绝）
+- **引用**可以带**元素类型**，也可以是**无类型**（元素类型为 **`void`** 的引用：仅有存储/视图，尚未绑定静态元素类型；分配器、`find` 等常见于此）。**`let` 名字**做的是**把符号绑定到右侧的那条引用**；**`let` 关键字本身不带类型**。**`let` 后是名字**（**`LetBindings`**），**再往后是引用一侧**（文法名 **`RefExpr`**，产生式见 [olang-syntax_zh.md](olang-syntax_zh.md)）。**`RefExpr`** 只是文法分类，**不等于**「表达式的类型一定是引用」（例如 **`addr[…]`** 的类型是 **`ptr`**）。
+- **链式名字**（**`let n1 let n2 … let nK` `RefExpr`**）：每个 **`let nk`** 引入的名字**本身都表示一条引用**。在语义展开里，**靠左**的名字绑定到从**靠右**叠出来的**视图**（通常当 **`RefExpr`** 是 **`Ident`** 时，最右边的 **`nk`** 紧挨该名字）；详见下文 *链式 `let`*。**靠右**一侧给出的那条引用，供更左侧的 **`let`** 继续用。
+- **`<Type> 内层`**（**`Type`** 含 **`void`**）：**`内层`** 须为**引用**（有类型或无类型的 **`ref`**），**不能**是 **`ptr`**。在同一块存储上引入新引用（**`<void>`** 时给出与 **`ptr`** 兼容的视图）。不要写 **`let n <T> addr[x]`**，应写 **`let n <T> x`**。见 **`sema.c`** 中 **`OL_EX_REF_BIND`**。
 
-- 旧 **`load<T>(ptr)`**、**`store<T>(…, …)`**
-- **`deref … as …;`**
-- 旧式 **`reinterpret<T>(expr)`**（文档与语言表面已去除；存储多视图用 `addr` + `<T>` / 多绑定 `let`）
-- 旧 **`cast<T>(expr)`** 右值模型（见英文档「Removed」）
-- **`Expr = Expr` 赋值**
-- **旧式多绑定**：两名字之间**无** **`let`**，例如 **`let x<T> y<U> @stack<…>(…)`** —— 每多一个名字都必须再写关键字 **`let`**（见下 **`LetBindings`**）。
+- **符号**（整条 **`let`** 处理完之后）按上面规则把每个引入的**名字**绑定到**引用**。
+- **`ptr`** 只表示地址，不携带元素类型。
+- **`find[Expr]`** 要求 **`Expr`** 求值为 **`ptr` 右值**；结果为**编译期对某块内存的引用**（一般 lowering 会像普通子表达式一样对 `Expr` 求值）。**禁止**嵌套 **`find`**。错误使用地址/对象是 **UB**。
+- 读写使用 **`load[expr]`** / **`store[左值, 表达式];`**。不支持 **`表达式 = 表达式`**。
+- **值**转换只用 **`T(表达式)`**（圆括号内是完整表达式），**没有** `cast` 关键字；**仅**在 **`iN`/`uN`/`bN`/`fN`** 之间（各族内变宽/截断及整数↔浮点），**不**与 **`ptr`**、**`bool`** 做值转换。与 **`<Type> RefExpr`**（新建引用并绑定类型）不要混为一谈。
+- **`addr [ RefExpr ]`** 是 **`ptr` 右值**（文法上的 **`RefExpr`** 一种），不分配新存储；需要 **`ptr` 值**时用（例如 **`stack[64, addr[x]]`**）。**`<T> …`** **不**以 **`addr[…]`** 为内层（**`T`** 含 **`void`** 时亦然）。
+- **存储放置：** **`stack` / `data` / `rodata` / `section`** 为 **`[`** **位宽** **`,`** 可选初始化式 **`]`**；**`bss`** 为 **`[`** **位宽** **`]`** 仅此。分配表达式为**无类型引用**；**`let`** 的元素类型由**初始化式**、**无类型块 + `<T>`**、或（文件顶层标量）**带初值的 `data`/`rodata`/…** 得到。细则见 [olang-syntax_zh.md](olang-syntax_zh.md)。
+- **`sizeof[Type]`** 为**编译期**整数（**`Type`** 的位宽）。
+- **`addr [ … ]`** 取方括号内引用所指存储的地址（**`ptr`**）。同址换视图应写 **`let n <T> x`**（**`x`** 为**引用**），而不是 **`let n <T> addr[x]`**。
+- **安全**：语言只提供运算，**不**保证别名或布局；误用视图可能 **UB**。
 
-## EBNF 草案（与当前 `parser.c` 对齐）
+## EBNF 概要（与当前 `parser.c` 对齐）
 
-- **`LetNameTy`** → `Ident` `<` `Type` `>` | `Ident` `<` `>`（后者即 `<>`，无元素类型）。
-- **`LetBindings`** → `LetNameTy`（`let` `LetNameTy`）* —— **每个**额外绑定前都要出现 **`let`**，不能用仅靠空格连接的多个 `Ident<Type>`。
+完整产生式与说明以 [olang-syntax_zh.md](olang-syntax_zh.md) 为准；此处为摘要。
 
-- **函数体内 `let`** → `let` `LetBindings`（`@stack` `<` `BitWidth` `>` `(` `Expr`? `)` | `RefExpr`）`;`
-- **全局 `let`** → `let` `LetBindings` `AllocatorG` `;`（**仅**全局分配器，见 [olang-syntax_zh.md](olang-syntax_zh.md) 中的 `AllocatorG`；**不是**任意 `RefExpr` 尾）
+- **`LetBindings`** → `Ident`（`let` `Ident`）* —— 绑定处**不写**类型。
 
-- **`RefExpr`** → `(` `RefExpr` `)`
-          | `find` `<` `Expr` `>`
-          | `addr` `Ident`
-          | `@` 分配器 …（如 `@stack`、`@data` …）
-          | `<` `Type` `>` `RefExpr`（含 `<void>`）
-          | `cast` `<` `Type` `>` `(` `RefExpr` `)`
-          | `Ident`（须为**引用**类存储；用于 **`let … refName`** 链式右侧）
-          | 内建类型关键字 `<` `RefExpr` `>`（`void` 不作为起始；见 `parser.c` 中 `is_T_angle_conv_starter`）
+- **局部 `let`** → `let` `LetBindings` `RefExpr` `;` —— 右侧为 **`RefExpr`**（见上文与文法稿）；文件顶层用 **`AllocatorG`**，不用这一形式里的 **`RefExpr`**。
 
-- **`Expr`** → …（含 `find` / `load` / `sizeof` / `cast` 等，见 [olang-syntax_zh.md](olang-syntax_zh.md)）
+- **全局 `let`** → `let` `LetBindings` `AllocatorG` `;` —— **`AllocatorG`** 仅为 **`data` / `rodata` / `bss` / `section`**（见 [olang-syntax_zh.md](olang-syntax_zh.md)）。
 
-- **`Stmt`** → … | `store<…>` | 局部/全局 `let` | 控制流 | `Expr` `;` —— **无** **`=`** 赋值
+```
+LetBindings ::= Ident ( let Ident )*
 
-细则与 **`RefExpr`** 完整列表以 [olang-syntax_zh.md](olang-syntax_zh.md) 为准；英文对照见 [olang-refmodel.md](olang-refmodel.md)。
+RefExpr ::= ( RefExpr )
+          | find [ Expr ]
+          | addr [ RefExpr ]
+          | stack [ … ]
+          | data [ Expr ]
+          | rodata [ Expr ]
+          | bss [ BitWidth ]
+          | section [ StrLit , Expr ]
+          | < Type > RefExpr
+          | Ident
+
+BitWidth ::= IntLit | sizeof [ Type ]
+```
+
+```
+Stmt ::= Block
+       | let LetBindings RefExpr ;
+       | store [ LValue , Expr ] ;
+       | if ( Expr ) Stmt [ else Stmt ]
+       | while ( Expr ) Stmt
+       | break ;
+       | continue ;
+       | return Expr? ;
+       | Expr ;
+
+LValue ::= Ident | Expr . Ident | Expr [ Expr ]
+```
+
+- **`Expr`**（片段）：**`sizeof[Type]`**、**`load[expr]`**、**`find[expr]`**、**`addr [ RefExpr ]`**、内建 **`T(表达式)`** 值转换、字面量、调用、字段、下标、一元/二元运算 —— 见 `parser.c` 的 `parse_expr` 与 [olang-syntax_zh.md](olang-syntax_zh.md)。
 
 ### 链式 `let`（绑定顺序）
 
-对 **`let b1 let b2 … let bN` `RefExpr`**，解析器按**从左到右**记录 **`b1`…`bN`**。当 **`RefExpr`** 为**引用名**（`Ident`）时，语义层把**最靠近右侧**的绑定（**`bN`**）视为紧贴该名字的一层，再向外叠加重视图（见 `sema.c` 中 **`check_let_ref_chain_views`**）。当尾部为 **`@stack`** / 全局分配器时，所有绑定共享同一块分配（多视图布局）。
+对 **`let b1 let b2 … let bN` `RefExpr`**，解析器按**从左到右**记录绑定。当 **`RefExpr`** 是引用**名字**（`Ident`）时，语义上把**最靠近右侧名字**的绑定当作与该名字最近的别名，并**向外**叠套引用视图（见 `sema.c` 中的 `check_let_ref_chain_views`）。当尾部是 **`stack[…]`** 或全局分配器时，**一次放置只绑定一个名字**（**`stack`** 内不再用逗号列多种视图类型）；多种视图请用 **`struct` 字段**或 **`<T>…` / 链式 `let`** 等。
 
-## 其它
+## 说明
+
+- **`T(表达式)`** —— 内建类型关键字加圆括号，括号内按完整 **`expr`** 解析（**`parse_expr`**），只做**值**转换；**没有**「`T(RefExpr)`」这种表面形式。
+- **`<Type> 内层`** —— **`内层`** 必须是**引用**；**`Type`** 可为 **`void`**。与 **`T(表达式)`** 不是一回事。
+- **`(` `expr` `)`** 为普通分组，不是转换。
+
+---
+
+[返回](../README_zh.md)

@@ -13,7 +13,7 @@
 - 顶层元素：
   - `extern Type Ident ( ParamList ) ;` 或 `extern Type Ident ( ParamList ) Block`
   - `Type Ident ( ParamList ) Block`（内部函数）
-  - 全局 `let`：按 **`LetBindings`**（每个名字前可有重复的 `let`，见下），再写**全局**分配器 `@data<…>`、`@bss<…>`、`@rodata<…>`、`@section("段名")<…>`（**不能** `@stack`）
+  - 全局 `let`：按 **`LetBindings`**（每个名字前可有重复的 `let`，见下），再写**全局**放置 — **`data[…]`**、**`rodata[…]`**、**`bss[…]`**、**`section[…]`**（**不能**使用函数体内的 **`stack`**）
   - `type` 类型定义（`struct` / `array`）
 - 至少有一个带函数体的函数。
 - 带 **`extern` 的函数定义**导出符号；无 `extern` 的顶层函数仅本编译单元可见。ELF 入口由**链接脚本**决定，不由编译器指定。
@@ -25,10 +25,10 @@
 - **标识符**：`[A-Za-z_][A-Za-z0-9_]*`（最长 63 字符）
 - **关键字**：
   - 控制与声明：`extern`、`let`、`if`、`else`、`while`、`break`、`continue`、`return`、`type`、`struct`、`array`
-  - 运算：`cast`、`find`、`load`、`store`、`addr`、`sizeof`
+  - 运算：`find`、`load`、`store`、`addr`、`sizeof`、`stack`、`data`、`bss`、`rodata`、`section`
   - 类型与字面量：`void`、`bool`、`ptr`、`true`、`false`、`i8` … `b64`（同用户文档）
-  - **保留**：`as`（词法有关键字，解析器尚无对应语法）
 - **字面量**：整型 / 浮点 / 布尔 / 字符 / 字符串（同 [syntax_zh](../../book/syntax_zh.md)）
+- **比较与移位**：`<`、`>`、`<=`、`>=`、`<<`、`>>` 与 C 类似词法分析（无尖括号泛型）。
 
 ### 类型
 
@@ -38,42 +38,49 @@ Type ::= void | bool | ptr | i8 | … | b64 | Ident
 
 ### 表达式（Expr）
 
-在 `parse_expr` 中：`cast<T>(expr)` 的 `expr` 为完整表达式；另有 `sizeof<T>`、`load<Ident>`、`addr Ident`、**`find < Expr >`**（与 `RefExpr` 中形式相同；操作数须为 `ptr` 右值）、字面量、变量、调用、字段、下标、一元/二元运算符（见 `parser.c`）。
+在 `parse_expr` 中：内建类型关键字 **`T(expr)`** 表示值转换；另有 **`sizeof[Type]`**、**`load[expr]`**、**`addr [ RefExpr ]`**（表达式类型 **`ptr`**）、**`find[expr]`**、字面量、调用、字段、下标、一元/二元运算符（见 `parser.c`）。
 
 ### 引用表达式（RefExpr）
 
-用于 `let LetBindings` 的第二段（`@…` 或单个 `RefExpr`），以及 `cast<T>(…)` **在 RefExpr 位置**时的内层（内层须为 RefExpr，非任意 Expr）：
+用于 `let LetBindings` 的第二段（**`stack` / `data` / …** 或单个 **`RefExpr`**），含 **`<Type> RefExpr`**（新建引用并绑定元素类型）。
+
+实现说明：`parser.c` 通过 **`parse_let_bindings`** 与 **`parse_alloc_expr`** / **`parse_ref_expr`** 组合得到该尾。
 
 ```
-LetNameTy ::= Ident < Type >
-            | Ident < >
-
-LetBindings ::= LetNameTy ( let LetNameTy )*
+LetBindings ::= LetBinding ( let LetBinding )*
+LetBinding ::= Ident                 // 元素类型由初始化式、或裸放置 + `<T>` 视图推出
 
 RefExpr ::= ( RefExpr )
-          | find < Expr >
-          | addr Ident
-          | @ stack | data | bss | rodata | section ( StrLit ) < BitWidth > ( Expr? )
-          | < [Type] > RefExpr
-          | cast < Type > ( RefExpr )
+          | find [ Expr ]
+          | addr [ RefExpr ]
+          | stack [ BitWidthOptInit ]
+          | data [ BitWidthOptInit ]
+          | rodata [ BitWidthOptInit ]
+          | bss [ BitWidth ]
+          | section [ StrLit , BitWidthOptInit ]
+          | < Type > RefExpr
           | Ident
 
-BitWidth ::= IntLit | sizeof < Type >
+BitWidth ::= DecIntLit             // 无后缀十进制正整数，表示位数
+BitWidthOptInit ::= BitWidth [ , Expr ]
 ```
 
-另：内建类型关键字（**非** `void`）与 **`<` `RefExpr` `>`** 的 **`T<…>`** 形式由 `parse_ref_expr` 一并解析（见 `is_T_angle_conv_starter`），不单独展开为一行，以免重复罗列关键字。
-
-- 函数体内分配器仅 `@stack`；文件顶层无 `@stack`。
-- `<void>` 表示不附加静态类型（内层须为 `ptr` 视图）。
-- **`Ident`**：在语义上须解析为**引用**类存储（支持 **`let a<T> let b<U> rhsName`** 等形式）。
-- **`find < Expr >`**：`Expr` 须为 **`ptr`** 类型的右值；结果为**编译期对内存对象的引用**（实现上照常对 `Expr` 求值）。**`find<>`** 非法；**不得**嵌套 **`find<find<…>>`**。在 `find<…>` 内若要用含顶层 **`>`** 的比较，须给比较式加圆括号（如 **`find<(a > b)>`**），避免与 `find` 的结束 **`>`** 混淆。
+- **`stack` / `data` / `rodata` / `section`** 的分配表达式语义类型为**无类型引用**；**`let`** 侧元素类型由**初始化式**、或**无初始化时的无类型块**再经 **`<T>`** 视图、或（文件顶层标量）**带初值的 `data`/`rodata`/…** 推出。
+- **栈 / data / rodata：** **`[`** **位宽** **`,`** 可选 **初始化式** **`]`**；位宽为**无后缀**十进制整数字面量（位数）。
+- **`bss`：** 仅 **`[`** **位宽** **`]`**，无第二参数、无初始化式。
+- **`section`：** **`section[`** 段名字符串 **`,`** **位宽** **`,`** 可选初始化式 **`]`**。
+- **不在**方括号里写「多视图类型表」；多名字见 **`let a let b (x)`**、**`struct`**、**`<T>…`**。
+- **`< Type > 内层`**：**新建**引用（**`Type`** 为 **`void`** 时为与 **`ptr`** 兼容的视图）；**不是** **`T(表达式)`** 值转换。**内层**须为**引用**，**不能**是 **`ptr`**（故不能是 **`addr[…]`** 的结果）。**`addr [ … ]`** 文法上是 **`RefExpr`**，类型却是 **`ptr`**。
+- 函数体内用 **`stack`** 表示栈上存储；文件顶层用 **`data` / `bss` / `rodata` / `section`**（不用 **`stack`**）。
+- **`Ident`**：在语义上须解析为**引用**类存储。
+- **`addr [ RefExpr ]`**：文法上属于 **`RefExpr`**，表达式类型为 **`ptr`**。当前**语义**要求方括号内为简单名字（**`OL_EX_VAR`**）；见 **`sema.c`** 中 **`OL_EX_ADDR`**。
 
 ### 语句
 
 ```
 Stmt ::= Block
-       | let LetBindings ( @stack < BitWidth > ( Expr? ) | RefExpr ) ;
-       | store < LValue , Expr > ;
+       | let LetBindings RefExpr ;
+       | store [ LValue , Expr ] ;
        | if ( Expr ) Stmt [ else Stmt ]
        | while ( Expr ) Stmt
        | break ;
@@ -84,31 +91,30 @@ Stmt ::= Block
 LValue ::= Ident | Expr . Ident | Expr [ Expr ]
 ```
 
-- **无** **`Expr = Expr`** 赋值语句；赋值通过 **`store<…>`**（见引用模型）。
-- **`let`**：使用上面的 **`LetBindings`** —— **每多一个** `Ident<Type>` 都要再写 **`let`**（旧写法 **`let x<T> y<U>`** 无中间 **`let`** 已拒绝）。随后要么是 **`@stack<…>(…)`**，要么是单个 **`RefExpr`**。无 `from` 关键字。链式结合顺序与嵌套重视图见 [olang-refmodel_zh.md](olang-refmodel_zh.md) 中「链式 `let`」。
-- **`store<…>`**：尖括号内为左值、逗号、右值表达式，再闭合 `>`；右值解析为避免与 `>` 冲突，使用较浅的表达式层（见 `parse_shift`）。
+- **无** **`Expr = Expr`** 赋值语句；赋值通过 **`store[左值, 右值];`**。
+- **`let`**：**`LetBindings`** 后为 **`RefExpr`** 或 **`stack` / `data` / …**。无 `from` 关键字。
 
 ### 顶层定义（续）
 
 ```
-AllocatorG ::= @data < BitWidth > ( Expr? )
-             | @bss < BitWidth > ( )
-             | @rodata < BitWidth > ( Expr )
-             | @section ( StrLit ) < BitWidth > ( Expr? )
+AllocatorG ::= data [ BitWidthOptInit ]
+             | rodata [ BitWidthOptInit ]
+             | bss [ BitWidth ]
+             | section [ StrLit , BitWidthOptInit ]
 
 TopLevel ::= … | let LetBindings AllocatorG ;
 ```
 
 ### 限制
 
-- 最多 8 个寄存器参数，其余走栈。
-- 局部 / 全局 `let` 多视图、标量/聚合、初始化规则见 [syntax_zh](../../book/syntax_zh.md)。
+- 至多 8 个寄存器传参，其余在栈上。
+- 链式 `let`（叠在引用名上）、**`stack[…]`**（一次放置一个名）、标量与聚合、初始化规则：见 [syntax_zh](../../book/syntax_zh.md)。
 - 无复合赋值；无 `++`/`--`。
 
 ### 值与存储
 
-- `load`、`addr`、字面量为**值**。具名存储由 `let` + 分配器引入。
-- 实现可为子表达式分配栈槽，非语言保证。
+- `load`、`addr`、字面量为**值**；具名存储来自 `let` + **`stack` / `data` / …**。
+- 子表达式溢出到临时槽属实现细节。
 
 ---
 

@@ -4,11 +4,11 @@
 
 ---
 
-64+ 个可运行示例（`examples/linux_x86_64/programs/ex_*.ol`，由 `make check` 批量运行）。
+大量可运行示例（`examples/linux_x86_64/programs/ex_*.ol`，由 `make check` 批量运行）。
 
 ### POSIX 封装（`libposix.kasm`）
 
-共用的 `extern` POSIX 声明（如 `extern i64 posix_write(...);`）在 [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol)。示例里用 `#include "posix_abi.ol"`；`examples/linux_x86_64/olc` 会传入 `-I` 以解析该路径。
+共用的 `extern` POSIX 声明（如 `posix_write(fd: i32, buf: ptr, n: u64)`）在 [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol)。示例里用 `#include "posix_abi.ol"`；`examples/linux_x86_64/olc` 会传入 `-I` 以解析该路径。
 
 ### 快速运行
 
@@ -42,12 +42,16 @@ make check
 | `ex_rt_load_store_i32.ol` | 经 `addr` 的 `load`/`store`（`i32`） |
 | `ex_rt_load_store_widths.ol` | `i8`、`i16`、`i64`、`u32` 的 `load`/`store` |
 | `ex_rt_ptr_eq.ol` | `ptr` 的 `==` / `!=` |
-| `ex_rt_multi_view.ol` | 栈上多绑定：`f32` 与 `i32` 两种视图，分别做浮点与整数运算 |
-| `ex_rt_u32_view.ol` | 同 4 字节：`i32` 经 `<u32>addr` 当作 `u32` 读 |
-| `ex_rt_global_sections.ol` | 全局变量与各段（`@data` / `@bss` / `@rodata`） |
-| `ex_rt_global_multi_view.ol` | 文件级多绑定：与 `ex_rt_multi_view.ol` 相同的 `f32`/`i32` 布局 |
-| `ex_rt_section_custom.ol` | 自定义全局段名 `@section("…")` |
+| `ex_rt_multi_view.ol` | `struct` 内 `f32` / `i32` 字段，同一块栈上布局 |
+| `ex_rt_u32_view.ol` | 同 4 字节：`i32` 经 `<u32>x` 当作 `u32` 读 |
+| `ex_rt_global_sections.ol` | 全局变量与各段（`data` / `bss` / `rodata`） |
+| `ex_rt_global_multi_view.ol` | 与 `ex_rt_multi_view.ol` 相同（函数内 `struct` + `stack`） |
+| `ex_rt_section_custom.ol` | 自定义 ELF 段：`section["…", 位宽, 初始化]` |
 | `ex_rt_f16.ol` | `f16` 字面量与转换（与 `f32` 配合做算术） |
+| `ex_rt_sizeof.ol` | `sizeof[Type]` 作 `u64`；`stack[位宽, …]` 放置 |
+| `ex_rt_stack_infer.ol` | `stack[32, 表达式]`、`rodata[32, …]` — 显式位宽 + 初始化式 |
+| `ex_rt_float_sci.ol` | 带指数的浮点字面量（`1e2`、`1e-3f32` 等） |
+| `ex_rt_find_wrapped.ol` | `find[…]` 在 ptr 操作数外多包一层括号 |
 
 #### 控制流
 
@@ -74,7 +78,7 @@ make check
 |------|------|
 | `ex_rt_binary_ops.ol` | `b32` 移位、位运算与算术 |
 | `ex_rt_b16_b64.ol` | `b16` / `b64` |
-| `ex_rt_b8_bitwise.ol` | `b8`（字面量零勿写 `0b8`，会与二进制前缀冲突；可用 `0b8` 或 `cast<b8>(0u8)`） |
+| `ex_rt_b8_bitwise.ol` | `b8`（字面量零勿写 `0b8`，会与二进制前缀冲突；零可用如 `1b8 ^ 1b8`，勿用同宽的 `u8`→`b8` 值转换） |
 
 #### 聚合类型
 

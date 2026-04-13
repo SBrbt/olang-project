@@ -1133,11 +1133,14 @@ static int gen_expr(CG *g, OlExpr *e) {
       int gi;
       int32_t d;
       int out;
+      const char *an =
+          (e->u.addr.inner && e->u.addr.inner->kind == OL_EX_VAR) ? e->u.addr.inner->u.var_name : NULL;
+      if (!an) return -1;
       if (e->u.addr.addr_kind == OL_ADDR_LOCAL) {
         int li_addr;
-        s = lookup_slot(g, e->u.addr.name);
+        s = lookup_slot(g, an);
         if (s < 0) return -1;
-        li_addr = find_local_loc(g, e->u.addr.name);
+        li_addr = find_local_loc(g, an);
         /* Logical binding through ptr: address is the pointer value in the slot, not &slot */
         if (li_addr >= 0 && g->loc[li_addr].indirect) {
           out = alloc_slot(g);
@@ -1161,9 +1164,9 @@ static int gen_expr(CG *g, OlExpr *e) {
         const OlTypeRef *gty = NULL;
         uint32_t goff = 0;
         const char *bsym = NULL;
-        gi = ol_program_find_global(g->p, e->u.addr.name);
+        gi = ol_program_find_global(g->p, an);
         if (gi < 0) return -1;
-        if (!cg_global_view(g, gi, e->u.addr.name, &gty, &goff, &bsym)) return -1;
+        if (!cg_global_view(g, gi, an, &gty, &goff, &bsym)) return -1;
         (void)gty;
         emit_lea_rax_rip(g, bsym, (int32_t)goff);
         if (g->failed) return -1;
@@ -1172,7 +1175,7 @@ static int gen_expr(CG *g, OlExpr *e) {
         return out;
       }
       if (e->u.addr.addr_kind == OL_ADDR_SYMBOL) {
-        emit_lea_rax_rip(g, sym_for_fn_ref(g, e->u.addr.name), 0);
+        emit_lea_rax_rip(g, sym_for_fn_ref(g, an), 0);
         if (g->failed) return -1;
         out = alloc_slot(g);
         emit_mov_rbp_r64(g, out, 0);
@@ -1274,7 +1277,7 @@ static int gen_expr(CG *g, OlExpr *e) {
       uint8_t modrm;
       uint8_t rex = 0x48;
       if (e->u.alloc_.alloc != OL_ALLOC_STACK) {
-        cg_err(g, "only @stack allocation allowed in expression position");
+        cg_err(g, "only stack[...] allowed in expression position");
         return -1;
       }
       bw = e->u.alloc_.bitwidth;
@@ -1325,7 +1328,7 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_mov_gpr_from_slot(g, 3, bi);
       if (off > 0) {
         emit_mov_rax_imm64(g, (int64_t)off);
-        tx_copy(g, (uint8_t[]){0x48, 0x29, 0xc3}, 3);
+        tx_copy(g, (uint8_t[]){0x48, 0x01, 0xc3}, 3); /* add rbx, rax — field address = struct base + offset */
       }
       tx_copy(g, (uint8_t[]){0x48, 0x89, 0xd8}, 3);
       f_elt = e->ty.ref_inner;
@@ -1426,7 +1429,6 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
         uint32_t bw;
         uint32_t blob_bytes;
         int num_slots;
-        size_t bi;
         int is_aggregate = 0;
         int base_slot;
         int ptr_slot;
@@ -1487,23 +1489,23 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
           break;
         }
         if (!re || re->kind != OL_EX_ALLOC) {
-          cg_err(g, "local let requires @stack<bits>(...) or <[Type]>ref");
+          cg_err(g, "local let requires stack[...] or (Type)ref");
           return 0;
         }
         if (re->u.alloc_.alloc != OL_ALLOC_STACK) {
-          cg_err(g, "local let must be @stack");
+          cg_err(g, "local let must use stack[...] for stack storage");
           return 0;
         }
         bw = re->u.alloc_.bitwidth;
         init_e = re->u.alloc_.init;
         blob_bytes = (bw + 7u) / 8u;
         num_slots = (int)((blob_bytes + 7u) / 8u);
-        if (s->u.let_.binding_count < 1u) {
-          cg_err(g, "let has no bindings");
+        if (s->u.let_.binding_count != 1u) {
+          cg_err(g, "stack[...] let expects one name per placement");
           return 0;
         }
         t0 = &s->u.let_.bindings[0].ty;
-        if (s->u.let_.binding_count == 1u && t0->kind == OL_TY_ALIAS) {
+        if (t0->kind == OL_TY_ALIAS) {
           int tdi = ol_program_find_typedef(g->p, t0->alias_name);
           if (tdi >= 0) {
             OlTypeDefKind tdk = g->p->typedefs[(size_t)tdi].kind;
@@ -1550,14 +1552,7 @@ static int gen_stmt(CG *g, OlFuncDef *fn, OlStmt *s) {
           if (rs < 0) return 0;
           emit_copy_rs_slot_to_rbp_disp(g, rs, slot_byte_disp(base_slot, 0), &init_e->ty);
         }
-        {
-          uint32_t off = 0;
-          for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
-            uint32_t nb = type_size_bytes(g->p, &s->u.let_.bindings[bi].ty);
-            if (!bind_local(g, s->u.let_.bindings[bi].name, base_slot, &s->u.let_.bindings[bi].ty, off)) return 0;
-            off += nb;
-          }
-        }
+        if (!bind_local(g, s->u.let_.bindings[0].name, base_slot, &s->u.let_.bindings[0].ty, 0)) return 0;
         break;
       }
       case OL_ST_STORE: {
@@ -1893,8 +1888,9 @@ static int emit_one_global_data_init(OlProgram *p, uint8_t **blob, size_t *blob_
   {
     OlExpr *ginit = cg_global_init(gd);
     if (!ginit) {
-      snprintf(err, err_len, "writable global needs initializer");
-      return 0;
+      *blob_len += (size_t)sz;
+      *out_off = off;
+      return 1;
     }
   if (ginit->kind == OL_EX_INT || ginit->kind == OL_EX_BOOL || ginit->kind == OL_EX_CHAR) {
     uint64_t v = 0;
@@ -2019,8 +2015,10 @@ static int ol_codegen_x64_emit_globals(CG *g, GlobLay *gl, PendingAbs64 *abs64, 
       {
         OlExpr *gin = cg_global_init(gd);
         if (!gin) {
-          snprintf(err, err_len, "rodata global needs initializer");
-          return 0;
+          g->ro_len += (size_t)sz;
+          gl[i].kind = 0;
+          gl[i].off = (uint64_t)off;
+          continue;
         }
       if (gin->kind == OL_EX_INT || gin->kind == OL_EX_BOOL || gin->kind == OL_EX_CHAR) {
         uint64_t v = 0;

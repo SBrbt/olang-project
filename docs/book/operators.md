@@ -4,7 +4,7 @@
 
 ---
 
-OLang is **strongly and statically typed**: for every binary operator, the left and right operands must have the **same** type. There are **no implicit numeric promotions** in expressions—use `cast` (values) or `let n<T> <T>addr x` (same storage, new type) when you need a different type.
+OLang is **strongly and statically typed**: for every binary operator, the left and right operands must have the **same** type. There are **no implicit numeric promotions** in expressions—use **`T(…)`** (value cast) or **`let n <T>x`** (same storage, new view) when you need a different type.
 
 The tables below list, **by type**, which operators are accepted by the compiler (`sema.c`).
 
@@ -33,7 +33,7 @@ Both operands must use the **same** integer type (e.g. two `i32`, not `i32` and 
 | `a < b`, `a > b`, `a <= b`, `a >= b` | Ordered comparison | `bool` |
 | `a == b`, `a != b` | Equality | `bool` |
 
-**Not available on integers:** `&`, `|`, `^`, `<<`, `>>` (those apply only to `b*` types). Use `b8`…`b64` if you need bitwise operations, or convert via `cast` after reading the rules in [types](types.md).
+**Not available on integers:** `&`, `|`, `^`, `<<`, `>>` (those apply only to `b*` types). Use `b8`…`b64` if you need bitwise operations, or use an explicit `bN(…)` / `uN(…)` value cast after reading the rules in [types](types.md).
 
 ---
 
@@ -80,7 +80,7 @@ Other binary operators are not defined for `ptr`.
 
 ### Aggregates (struct, array)
 
-Struct and array values are **not** “scalar” in the checker: you cannot use `==` / `!=` or arithmetic on them in expressions. Writes use **`store<…>`** on an lvalue (including field and index paths). Compare fields or use field/index patterns if you need a scalar view.
+Struct and array values are **not** “scalar” in the checker: you cannot use `==` / `!=` or arithmetic on them in expressions. Writes use **`store[…]`** on an lvalue (including field and index paths). Compare fields or use field/index patterns if you need a scalar view.
 
 ---
 
@@ -89,7 +89,7 @@ Struct and array values are **not** “scalar” in the checker: you cannot use 
 High → low:
 
 ```
-() [] . addr cast find sizeof load <[T]>  // highest (includes ref forms)
+() [] . addr[find] sizeof load <T> T()      // highest (T() = value cast; <T> = new ref + element type)
 ! ~ -                               // unary
 * / %
 + -
@@ -108,11 +108,11 @@ High → low:
 ### Examples
 
 ```olang
-let i<i32> @stack<32>((a + b) * c);
-let cmp<bool> @stack<8>((i > 0i32) && done);     // i32 compares; bool logic
+let i stack[32, (a + b) * c];
+let cmp stack[8, (i > 0i32) && done];     // i32 compares; bool logic
 
-let x<b32> @stack<32>(0xFF00b32);
-let y<b32> @stack<32>(x & 0x00FFb32);             // bitwise only on b*
+let x stack[32, 0xFF00b32];
+let y stack[32, x & 0x00FFb32];             // bitwise only on b*
 ```
 
 ---

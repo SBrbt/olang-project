@@ -2,13 +2,16 @@
 // Linked by examples/linux_x86_64/olc together with libposix.oobj. Use via: #include "posix_abi.ol"
 // (olc passes -I to the preprocessor for this directory.)
 // Parameter names avoid OLang keywords (e.g. "addr" is reserved).
+//
+// LP64-style names: file descriptors and pid like POSIX `int` -> i32; sizes/counts like size_t -> u64;
+// syscall results like ssize_t -> i64.
 
-extern i64 posix_write(fd: i64, buf: ptr, n: i64);
-extern i64 posix_read(fd: i64, buf: ptr, n: i64);
+extern i64 posix_write(fd: i32, buf: ptr, n: u64);
+extern i64 posix_read(fd: i32, buf: ptr, n: u64);
 extern i64 posix_openat(dirfd: i32, path: ptr, flags: i32, mode: i32);
 extern i64 posix_close(fd: i32);
 extern i64 posix_getpid();
-extern i64 posix_kill(pid: i64, sig: i32);
+extern i64 posix_kill(pid: i32, sig: i32);
 extern i64 posix_rt_sigprocmask(how: i32, sigset: ptr, oldset: ptr, sigsetsize: u64);
 extern ptr posix_mmap(base: ptr, len: u64, prot: i32, mmap_flags: i32, fd: i32, offset: u64);
 extern i64 posix_munmap(base: ptr, len: u64);

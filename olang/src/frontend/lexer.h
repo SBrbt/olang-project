@@ -56,9 +56,13 @@ typedef enum OlTok {
   TOK_KW_LOAD,
   TOK_KW_STORE,
   TOK_KW_ADDR,
-  TOK_KW_AS,
   TOK_KW_FIND,
   TOK_KW_SIZEOF,
+  TOK_KW_STACK,
+  TOK_KW_DATA,
+  TOK_KW_BSS,
+  TOK_KW_RODATA,
+  TOK_KW_SECTION,
   TOK_KW_BREAK,
   TOK_KW_CONTINUE,
   TOK_KW_TRUE,
@@ -105,5 +109,24 @@ typedef struct OlLexer {
 void ol_lexer_init(OlLexer *L, const char *path, const char *src, size_t len);
 void ol_lexer_free_strings(OlLexer *L);
 void ol_lexer_next(OlLexer *L);
+
+/* Save lexer position for speculative parse; str_val ownership moves to snap until restore/release. */
+typedef struct OlLexerSnap {
+  size_t pos;
+  int line;
+  OlTok tok;
+  char ident[128];
+  int64_t int_val;
+  uint8_t int_suffix;
+  double float_val;
+  uint8_t float_suffix;
+  uint8_t char_val;
+  char *str_val;
+  size_t str_len;
+} OlLexerSnap;
+
+void ol_lexer_snapshot(OlLexer *L, OlLexerSnap *s);
+void ol_lexer_restore(OlLexer *L, OlLexerSnap *s);
+void ol_lexer_snap_release(OlLexerSnap *s);
 
 #endif

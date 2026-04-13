@@ -77,6 +77,35 @@
     { "mnemonic": "cmp_eax_imm32", "bytes": "3d", "imm_bits": 32 },
     { "mnemonic": "cmp_rdi_imm32", "bytes": "4881ff", "imm_bits": 32 },
 
-    { "mnemonic": "mov_ax_imm16", "bytes": "66b8", "imm_bits": 16 }
+    { "mnemonic": "mov_ax_imm16", "bytes": "66b8", "imm_bits": 16 },
+
+    { "mnemonic": "mov_eax_r12d", "bytes": "4489e0", "imm_bits": 0 },
+    { "mnemonic": "movzx_eax_ax", "bytes": "0fb7c0", "imm_bits": 0 },
+    { "mnemonic": "mov_ecx_eax", "bytes": "89c1", "imm_bits": 0 },
+    { "mnemonic": "mov_edx_eax", "bytes": "89c2", "imm_bits": 0 },
+    { "mnemonic": "mov_esi_eax", "bytes": "89c6", "imm_bits": 0 },
+    { "mnemonic": "mov_eax_esi", "bytes": "89f0", "imm_bits": 0 },
+    { "mnemonic": "shr_ecx_imm8", "bytes": "c1e9", "imm_bits": 8 },
+    { "mnemonic": "shl_ecx_imm8", "bytes": "c1e1", "imm_bits": 8 },
+    { "mnemonic": "shr_esi_imm8", "bytes": "c1ee", "imm_bits": 8 },
+    { "mnemonic": "shl_esi_imm8", "bytes": "c1e6", "imm_bits": 8 },
+    { "mnemonic": "shl_edx_imm8", "bytes": "c1e2", "imm_bits": 8 },
+    { "mnemonic": "shr_edx_imm8", "bytes": "c1ea", "imm_bits": 8 },
+    { "mnemonic": "and_ecx_imm8", "bytes": "83e1", "imm_bits": 8 },
+    { "mnemonic": "and_edx_imm32", "bytes": "81e2", "imm_bits": 32 },
+    { "mnemonic": "and_ecx_imm32", "bytes": "81e1", "imm_bits": 32 },
+    { "mnemonic": "and_esi_imm32", "bytes": "81e6", "imm_bits": 32 },
+    { "mnemonic": "test_ecx_ecx", "bytes": "85c9", "imm_bits": 0 },
+    { "mnemonic": "test_edx_edx", "bytes": "85d2", "imm_bits": 0 },
+    { "mnemonic": "cmp_ecx_imm8", "bytes": "83f9", "imm_bits": 8 },
+    { "mnemonic": "cmp_ecx_imm32", "bytes": "81f9", "imm_bits": 32 },
+    { "mnemonic": "add_ecx_imm8", "bytes": "83c1", "imm_bits": 8 },
+    { "mnemonic": "sub_ecx_imm8", "bytes": "83e9", "imm_bits": 8 },
+    { "mnemonic": "or_eax_ecx", "bytes": "09c8", "imm_bits": 0 },
+    { "mnemonic": "or_eax_edx", "bytes": "09d0", "imm_bits": 0 },
+    { "mnemonic": "or_eax_imm32", "bytes": "0d", "imm_bits": 32 },
+    { "mnemonic": "je_rel8", "bytes": "74", "imm_bits": 8 },
+    { "mnemonic": "ja_rel8", "bytes": "77", "imm_bits": 8 },
+    { "mnemonic": "jb_rel8", "bytes": "72", "imm_bits": 8 }
   ]
 }

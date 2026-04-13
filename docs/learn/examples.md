@@ -4,11 +4,11 @@
 
 ---
 
-64+ runnable examples (`examples/linux_x86_64/programs/ex_*.ol`, exercised by `make check`).
+Many runnable examples (`examples/linux_x86_64/programs/ex_*.ol`, exercised by `make check`).
 
 ### POSIX syscall shims (`libposix.kasm`)
 
-Shared `extern` POSIX declarations (e.g. `extern i64 posix_write(...);`) live in [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol). Example programs use `#include "posix_abi.ol"`; `examples/linux_x86_64/olc` passes `-I` so that path resolves.
+Shared `extern` POSIX declarations (e.g. `posix_write(fd: i32, buf: ptr, n: u64)`) live in [`examples/linux_x86_64/include/posix_abi.ol`](../../examples/linux_x86_64/include/posix_abi.ol). Example programs use `#include "posix_abi.ol"`; `examples/linux_x86_64/olc` passes `-I` so that path resolves.
 
 ### Quick Run
 
@@ -42,12 +42,16 @@ make check
 | `ex_rt_load_store_i32.ol` | `load`/`store` via `addr` (`i32`) |
 | `ex_rt_load_store_widths.ol` | `load`/`store` for `i8`, `i16`, `i64`, `u32` |
 | `ex_rt_ptr_eq.ol` | `ptr` `==` / `!=` |
-| `ex_rt_multi_view.ol` | Stack multi-binding: `f32` + `i32` views, float vs int ops |
-| `ex_rt_u32_view.ol` | Same 4-byte slot: `i32` value read as `u32` via `<u32>addr` |
-| `ex_rt_global_sections.ol` | Globals and sections (`@data` / `@bss` / `@rodata`) |
-| `ex_rt_global_multi_view.ol` | Global multi-binding: same `f32`/`i32` layout as `ex_rt_multi_view.ol` |
-| `ex_rt_section_custom.ol` | Custom global section name `@section("…")` |
+| `ex_rt_multi_view.ol` | `struct` with `f32` / `i32` fields on one `stack[64, …]` slot |
+| `ex_rt_u32_view.ol` | Same 4-byte slot: `i32` value read as `u32` via `<u32>x` |
+| `ex_rt_global_sections.ol` | Globals and sections (`data` / `bss` / `rodata`) |
+| `ex_rt_global_multi_view.ol` | Same as `ex_rt_multi_view.ol` (function-local `struct` + `stack`) |
+| `ex_rt_section_custom.ol` | Custom section: `section["…", bitwidth, init]` |
 | `ex_rt_f16.ol` | `f16` literals and casts (combine with `f32` for arithmetic) |
+| `ex_rt_sizeof.ol` | `sizeof[Type]` as `u64`; `stack[bitwidth, …]` placement |
+| `ex_rt_stack_infer.ol` | `stack[32, expr]`, `rodata[32, …]` — explicit bit width + initializer |
+| `ex_rt_float_sci.ol` | Float literals with exponent (`1e2`, `1e-3f32`, …) |
+| `ex_rt_find_wrapped.ol` | `find[…]` with extra parentheses around the ptr operand |
 
 #### Control Flow
 
@@ -74,7 +78,7 @@ make check
 |---------|-------------|
 | `ex_rt_binary_ops.ol` | `b32` shifts / bitwise / arithmetic |
 | `ex_rt_b16_b64.ol` | `b16` / `b64` |
-| `ex_rt_b8_bitwise.ol` | `b8` (avoid `0b8` token; use `0b8` or `cast<b8>(0u8)` for zero) |
+| `ex_rt_b8_bitwise.ol` | `b8` (avoid `0b8` token clash; use e.g. `1b8 ^ 1b8` for zero, not a same-width `u8`→`b8` cast) |
 
 #### Aggregate Types
 

@@ -35,7 +35,7 @@ bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/l
 ### 鲁棒性用例（`ex_rt_*`）
 
 - 前缀 **`ex_rt_`**：编译器/后端回归场景。
-- 默认 **`return cast<i32>(0)`** 表示通过。
+- 默认 **`return i32(0)`** 表示通过。
 - Phase 1 无对已有 `let` 的赋值；计数场景可能用递归代替可变循环。
 
 在 `linux_x86_64/programs/` 下新增 `ex_*.ol` 会被测试脚本自动收录；需要特殊 stdout/退出码断言时编辑 `tests/olang/run_programs_olc.sh`。

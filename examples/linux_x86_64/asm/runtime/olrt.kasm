@@ -18,41 +18,41 @@ inst ret
 .global __olrt_f16_to_f32
 __olrt_f16_to_f32:
 # mov rax, r12 ; movzx eax, ax (get low 16 bits)
-.bytes 4c 89 e0
-.bytes 0f b7 c0
+inst mov_rax_r12
+inst movzx_eax_ax
 # mov ecx, eax ; shr ecx, 10 ; and ecx, 0x1f  (exp = (h>>10)&0x1f)
-.bytes 89 c1
-.bytes c1 e9 0a
-.bytes 83 e1 1f
+inst mov_ecx_eax
+inst shr_ecx_imm8 10
+inst and_ecx_imm8 0x1f
 # mov edx, eax ; and edx, 0x3ff  (mant = h & 0x3ff)
-.bytes 89 c2
-.bytes 81 e2 ff 03 00 00
+inst mov_edx_eax
+inst and_edx_imm32 0x3ff
 # mov esi, eax ; shr esi, 15 ; shl esi, 31  (sign<<31)
-.bytes 89 c6
-.bytes c1 ee 0f
-.bytes c1 e6 1f
+inst mov_esi_eax
+inst shr_esi_imm8 15
+inst shl_esi_imm8 31
 # test ecx, ecx ; je .f16_zero
-.bytes 85 c9
-.bytes 74 15
+inst test_ecx_ecx
+inst je_rel8 0x15
 # cmp ecx, 0x1f ; je .f16_inf_nan
-.bytes 83 f9 1f
-.bytes 74 13
+inst cmp_ecx_imm8 0x1f
+inst je_rel8 0x13
 # Normal: add ecx, 112 ; shl ecx, 23 ; shl edx, 13 ; or eax, esi ; or eax, ecx ; or eax, edx ; ret
-.bytes 83 c1 70
-.bytes c1 e1 17
-.bytes c1 e2 0d
-.bytes 89 f0
-.bytes 09 c8
-.bytes 09 d0
+inst add_ecx_imm8 0x70
+inst shl_ecx_imm8 23
+inst shl_edx_imm8 13
+inst mov_eax_esi
+inst or_eax_ecx
+inst or_eax_edx
 inst ret
 # .f16_zero: mov eax, esi ; ret
-.bytes 89 f0
+inst mov_eax_esi
 inst ret
 # .f16_inf_nan: shl edx, 13 ; mov eax, esi ; or eax, 0x7f800000 ; or eax, edx ; ret
-.bytes c1 e2 0d
-.bytes 89 f0
-.bytes 0d 00 00 80 7f
-.bytes 09 d0
+inst shl_edx_imm8 13
+inst mov_eax_esi
+inst or_eax_imm32 0x7f800000
+inst or_eax_edx
 inst ret
 
 # __olrt_f32_to_f16: Convert IEEE 754 single-precision to half-precision.
@@ -69,48 +69,48 @@ inst ret
 .global __olrt_f32_to_f16
 __olrt_f32_to_f16:
 # mov eax, r12d (get low 32 bits)
-.bytes 44 89 e0
+inst mov_eax_r12d
 # mov ecx, eax ; shr ecx, 23 ; and ecx, 0xff  (exp)
-.bytes 89 c1
-.bytes c1 e9 17
-.bytes 81 e1 ff 00 00 00
+inst mov_ecx_eax
+inst shr_ecx_imm8 23
+inst and_ecx_imm32 0xff
 # mov edx, eax ; and edx, 0x7fffff  (mant)
-.bytes 89 c2
-.bytes 81 e2 ff ff 7f 00
+inst mov_edx_eax
+inst and_edx_imm32 0x7fffff
 # mov esi, eax ; shr esi, 16 ; and esi, 0x8000  (sign)
-.bytes 89 c6
-.bytes c1 ee 10
-.bytes 81 e6 00 80 00 00
+inst mov_esi_eax
+inst shr_esi_imm8 16
+inst and_esi_imm32 0x8000
 # cmp ecx, 0xff ; je .f32_inf_nan
-.bytes 81 f9 ff 00 00 00
-.bytes 74 20
+inst cmp_ecx_imm32 0xff
+inst je_rel8 0x20
 # cmp ecx, 142 ; ja .f32_overflow
-.bytes 81 f9 8e 00 00 00
-.bytes 77 29
+inst cmp_ecx_imm32 142
+inst ja_rel8 0x29
 # cmp ecx, 113 ; jb .f32_underflow
-.bytes 81 f9 71 00 00 00
-.bytes 72 29
+inst cmp_ecx_imm32 113
+inst jb_rel8 0x29
 # Normal: sub ecx, 112 ; shl ecx, 10 ; shr edx, 13 ; mov eax, esi ; or eax, ecx ; or eax, edx ; ret
-.bytes 83 e9 70
-.bytes c1 e1 0a
-.bytes c1 ea 0d
-.bytes 89 f0
-.bytes 09 c8
-.bytes 09 d0
+inst sub_ecx_imm8 0x70
+inst shl_ecx_imm8 10
+inst shr_edx_imm8 13
+inst mov_eax_esi
+inst or_eax_ecx
+inst or_eax_edx
 inst ret
 # .f32_inf_nan: test edx, edx ; mov eax, esi ; or eax, 0x7c00
-.bytes 85 d2
-.bytes 89 f0
-.bytes 0d 00 7c 00 00
+inst test_edx_edx
+inst mov_eax_esi
+inst or_eax_imm32 0x7c00
 # je .f32_inf_ret ; or eax, 0x200
-.bytes 74 05
-.bytes 0d 00 02 00 00
+inst je_rel8 5
+inst or_eax_imm32 0x200
 # .f32_inf_ret:
 inst ret
 # .f32_overflow: mov eax, esi ; or eax, 0x7c00 ; ret
-.bytes 89 f0
-.bytes 0d 00 7c 00 00
+inst mov_eax_esi
+inst or_eax_imm32 0x7c00
 inst ret
 # .f32_underflow: mov eax, esi ; ret
-.bytes 89 f0
+inst mov_eax_esi
 inst ret

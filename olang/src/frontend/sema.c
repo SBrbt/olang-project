@@ -93,7 +93,7 @@ static void type_make_ref(OlTypeRef *out, const OlTypeRef *elem) {
 
 static int type_is_ref(const OlTypeRef *t) { return t && t->kind == OL_TY_REF && t->ref_inner != NULL; }
 
-/* R with element type void: location without static element type (find / @alloc); use <T> for a typed view. */
+/* R with element type void: location without static element type (find / stack|data|… with no initializer); use <T> for a typed view. */
 static int type_is_untyped_ref(const OlTypeRef *t) {
   return type_is_ref(t) && t->ref_inner && t->ref_inner->kind == OL_TY_VOID;
 }
@@ -138,6 +138,11 @@ static int type_is_binary(const OlTypeRef *t) {
 }
 static int type_is_scalar(const OlTypeRef *t) {
   return type_is_int(t) || type_is_float(t) || type_is_binary(t) || t->kind == OL_TY_PTR || t->kind == OL_TY_BOOL;
+}
+
+/* T(expr) value cast: only iN/uN/bN/fN ↔ each other (no ptr, bool, typedef targets). */
+static int type_is_value_cast_family(const OlTypeRef *t) {
+  return type_is_unsigned_int(t) || type_is_signed_int(t) || type_is_binary(t) || type_is_float(t);
 }
 static int type_is_condition(const OlTypeRef *t) {
   return t->kind == OL_TY_BOOL;
@@ -253,24 +258,22 @@ static int can_explicit_cast(OlProgram *p, const OlTypeRef *from, const OlTypeRe
     type_copy(&fe, from->ref_inner);
     fromv = &fe;
   }
+  if (!type_is_value_cast_family(to) || !type_is_value_cast_family(fromv)) {
+    if (from->kind == OL_TY_REF) type_free_ref(&fe);
+    return 0;
+  }
   if (type_eq(fromv, to)) {
     if (from->kind == OL_TY_REF) type_free_ref(&fe);
     return 0; /* same type: no explicit cast */
   }
   sf = ty_size_bytes(p, fromv);
   st = ty_size_bytes(p, to);
-  /* Same-width iN<->uN reinterpret (e.g. i32→u32): not implemented (runtime sign semantics undefined here). */
+  /* Same-width iN<->uN reinterpret (e.g. i32→u32): not implemented (use <T> views on refs). */
   if (sf > 0u && sf == st && type_is_int(fromv) && type_is_int(to) &&
       ((type_is_signed_int(fromv) && type_is_unsigned_int(to)) ||
        (type_is_unsigned_int(fromv) && type_is_signed_int(to)))) {
     if (from->kind == OL_TY_REF) type_free_ref(&fe);
     return 0;
-  }
-  /* Same-size non-float scalars (value cast). For storage views use multi-binding let with <T>addr / find. */
-  if (sf > 0u && sf == st && fromv->kind != OL_TY_ALIAS && to->kind != OL_TY_ALIAS &&
-      !type_is_float(fromv) && !type_is_float(to) && type_is_scalar(fromv) && type_is_scalar(to)) {
-    if (from->kind == OL_TY_REF) type_free_ref(&fe);
-    return 1;
   }
   /* uN -> uN */
   if (type_is_unsigned_int(fromv) && type_is_unsigned_int(to)) {
@@ -307,16 +310,6 @@ static int can_explicit_cast(OlProgram *p, const OlTypeRef *from, const OlTypeRe
     return 1;
   }
   if (type_is_unsigned_int(fromv) && type_is_float(to)) {
-    if (from->kind == OL_TY_REF) type_free_ref(&fe);
-    return 1;
-  }
-  /* bool -> uN/iN */
-  if (fromv->kind == OL_TY_BOOL && (type_is_unsigned_int(to) || type_is_signed_int(to))) {
-    if (from->kind == OL_TY_REF) type_free_ref(&fe);
-    return 1;
-  }
-  /* uN/iN -> bool */
-  if ((type_is_unsigned_int(fromv) || type_is_signed_int(fromv)) && to->kind == OL_TY_BOOL) {
     if (from->kind == OL_TY_REF) type_free_ref(&fe);
     return 1;
   }
@@ -475,23 +468,6 @@ static const OlTypeRef *lookup_global_type(const OlProgram *p, const char *name)
   return NULL;
 }
 
-/* Bytes at the pointee storage (element size); 0 if unknown (e.g. opaque ptr). */
-static uint32_t sym_pointee_storage_bytes(SemaCtx *S, SymSlot *sl) {
-  int tdi;
-  if (!sl) return 0u;
-  if (sl->indirect) return ty_size_bytes(S->prog, &sl->ty);
-  if (sl->ty.kind == OL_TY_PTR) return 0u;
-  if (sl->ty.kind == OL_TY_ALIAS) {
-    tdi = ol_program_find_typedef(S->prog, sl->ty.alias_name);
-    if (tdi >= 0) {
-      if (S->prog->typedefs[(size_t)tdi].kind == OL_TYPEDEF_STRUCT ||
-          S->prog->typedefs[(size_t)tdi].kind == OL_TYPEDEF_ARRAY)
-        return S->prog->typedefs[(size_t)tdi].size_bytes;
-    }
-  }
-  return ty_size_bytes(S->prog, &sl->ty);
-}
-
 static int typedef_is_aggregate(const OlProgram *p, const OlTypeRef *t, int *out_agg) {
   int tdi;
   *out_agg = 0;
@@ -520,11 +496,11 @@ static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t 
   int is_aggregate = 0;
   OlExpr *init = NULL;
   if (!gd->ref_expr || gd->ref_expr->kind != OL_EX_ALLOC) {
-    snprintf(err, err_len, "global let requires @data|@bss|@rodata|@section<bits>(...)");
+    snprintf(err, err_len, "global let requires data|bss|rodata|section(...)");
     return 0;
   }
   if (gd->ref_expr->u.alloc_.alloc == OL_ALLOC_STACK) {
-    snprintf(err, err_len, "@stack not allowed at file scope");
+    snprintf(err, err_len, "stack[...] not allowed at file scope");
     return 0;
   }
   switch (gd->ref_expr->u.alloc_.alloc) {
@@ -545,21 +521,6 @@ static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t 
       snprintf(err, err_len, "invalid global allocator");
       return 0;
   }
-  if (gd->ref_expr->u.alloc_.bitwidth_is_sizeof) {
-    if (!type_is_valid(p, &gd->ref_expr->u.alloc_.sizeof_bw_ty) || gd->ref_expr->u.alloc_.sizeof_bw_ty.kind == OL_TY_VOID) {
-      snprintf(err, err_len, "invalid sizeof type in global allocator width");
-      return 0;
-    }
-    {
-      uint32_t bb = ty_size_bytes(p, &gd->ref_expr->u.alloc_.sizeof_bw_ty) * 8u;
-      if (bb == 0u) {
-        snprintf(err, err_len, "global allocator sizeof width is zero");
-        return 0;
-      }
-      gd->ref_expr->u.alloc_.bitwidth = bb;
-      gd->ref_expr->u.alloc_.bitwidth_is_sizeof = 0;
-    }
-  }
   bw = gd->ref_expr->u.alloc_.bitwidth;
   init = gd->ref_expr->u.alloc_.init;
   if (gd->binding_count < 1 || gd->binding_count > OL_MAX_LET_BINDINGS) {
@@ -576,10 +537,10 @@ static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t 
   }
   for (bi = 0; bi < gd->binding_count; ++bi) {
     if (!gd->bindings[bi].has_ty) {
-      snprintf(err, err_len, "global let requires a type in name<Type>");
+      snprintf(err, err_len, "global let: could not infer binding types from allocator");
       return 0;
     }
-    if (!type_is_valid(p, &gd->bindings[bi].ty) || gd->bindings[bi].ty.kind == OL_TY_VOID) {
+    if (!type_is_valid(p, &gd->bindings[bi].ty)) {
       snprintf(err, err_len, "invalid global type");
       return 0;
     }
@@ -603,10 +564,19 @@ static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t 
     }
   }
   for (bi = 0; bi < gd->binding_count; ++bi) {
-    uint32_t b = ty_size_bytes(p, &gd->bindings[bi].ty) * 8u;
-    if (b == 0) {
-      snprintf(err, err_len, "global type has zero size");
-      return 0;
+    uint32_t b;
+    if (gd->bindings[bi].ty.kind == OL_TY_VOID) {
+      if (gd->binding_count != 1u) {
+        snprintf(err, err_len, "untyped global placement allows only one name");
+        return 0;
+      }
+      b = bw;
+    } else {
+      b = ty_size_bytes(p, &gd->bindings[bi].ty) * 8u;
+      if (b == 0) {
+        snprintf(err, err_len, "global type has zero size");
+        return 0;
+      }
     }
     sum_bits += b;
   }
@@ -621,22 +591,12 @@ static int validate_global_def(OlProgram *p, OlGlobalDef *gd, char *err, size_t 
     }
   }
   if (gd->section == OL_GSEC_BSS && init) {
-    snprintf(err, err_len, "@bss global cannot have initializer");
+    snprintf(err, err_len, "bss[...] global cannot have initializer");
     return 0;
   }
-  if ((gd->section == OL_GSEC_DATA || gd->section == OL_GSEC_CUSTOM) && !init) {
-    snprintf(err, err_len, "global in writable section needs initializer");
+  if (global_storage_is_rodata(gd) && init && !init_expr_is_const(init)) {
+    snprintf(err, err_len, "@rodata initializer must be constant");
     return 0;
-  }
-  if (global_storage_is_rodata(gd)) {
-    if (!init) {
-      snprintf(err, err_len, "@rodata global requires initializer");
-      return 0;
-    }
-    if (!init_expr_is_const(init)) {
-      snprintf(err, err_len, "@rodata initializer must be constant");
-      return 0;
-    }
   }
   (void)init;
   return 1;
@@ -690,7 +650,7 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
     }
     case OL_EX_NEG:
       if (!resolve_expr(S, e->u.neg.inner)) return 0;
-      if (!expr_is_value_ok(S, e->u.neg.inner, "negation operand must be a value (use load<...> for storage)")) return 0;
+      if (!expr_is_value_ok(S, e->u.neg.inner, "negation operand must be a value (use load[...] for storage)")) return 0;
       if (!type_is_int(&e->u.neg.inner->ty) && !type_is_float(&e->u.neg.inner->ty) && !type_is_binary(&e->u.neg.inner->ty)) {
         sema_err(S, e->line, "negation requires int, float, or binary operand");
         return 0;
@@ -718,8 +678,8 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
     case OL_EX_BINARY: {
       OlBinOp op = e->u.binary.op;
       if (!resolve_expr(S, e->u.binary.left) || !resolve_expr(S, e->u.binary.right)) return 0;
-      if (!expr_is_value_ok(S, e->u.binary.left, "binary operand must be a value (use load<...> for storage)")) return 0;
-      if (!expr_is_value_ok(S, e->u.binary.right, "binary operand must be a value (use load<...> for storage)")) return 0;
+      if (!expr_is_value_ok(S, e->u.binary.left, "binary operand must be a value (use load[...] for storage)")) return 0;
+      if (!expr_is_value_ok(S, e->u.binary.right, "binary operand must be a value (use load[...] for storage)")) return 0;
       /* logical && || : strict bool */
       if (op == OL_BIN_AND || op == OL_BIN_OR) {
         if (e->u.binary.left->ty.kind != OL_TY_BOOL || e->u.binary.right->ty.kind != OL_TY_BOOL) {
@@ -854,7 +814,7 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
           !type_is_float(src_sz) && !type_is_float(&e->u.cast_.to) &&
           type_is_scalar(src_sz) && type_is_scalar(&e->u.cast_.to)) {
         sema_err(S, e->line,
-                  "same-width rebind of a variable: use `let n<T> <T>addr name`");
+                  "same-width rebind of a variable: use indirect let with <T>x, not T(...) on a bare name");
         return 0;
       }
       if (!can_explicit_cast(S->prog, &e->u.cast_.inner->ty, &e->u.cast_.to)) {
@@ -871,25 +831,17 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
         return 0;
       }
       S->ref_bind_depth--;
-      if (e->u.ref_bind.to.kind == OL_TY_VOID) {
-        if (e->u.ref_bind.inner->ty.kind == OL_TY_PTR) {
-          type_copy(&e->ty, &e->u.ref_bind.inner->ty);
-          return 1;
-        }
-        if (type_is_untyped_ref(&e->u.ref_bind.inner->ty)) {
-          e->ty.kind = OL_TY_PTR;
-          return 1;
-        }
-        sema_err(S, e->line, "<void> ref expects ptr or untyped reference (find / @alloc)");
+      if (!type_is_ref(&e->u.ref_bind.inner->ty)) {
+        sema_err(S, e->line, "<T> expects a reference, not ptr (use a name / find / field / index, not addr[...])");
         return 0;
+      }
+      if (e->u.ref_bind.to.kind == OL_TY_VOID) {
+        /* <void> ref: ptr-compatible view of referenced storage */
+        e->ty.kind = OL_TY_PTR;
+        return 1;
       }
       if (!type_is_valid(S->prog, &e->u.ref_bind.to)) {
         sema_err(S, e->line, "invalid ref bind type");
-        return 0;
-      }
-      if (e->u.ref_bind.inner->ty.kind != OL_TY_PTR && !type_is_untyped_ref(&e->u.ref_bind.inner->ty) &&
-          !type_is_ref(&e->u.ref_bind.inner->ty)) {
-        sema_err(S, e->line, "typed ref bind expects ptr, untyped reference, or typed reference");
         return 0;
       }
       if (type_is_ref(&e->u.ref_bind.inner->ty) && !type_is_untyped_ref(&e->u.ref_bind.inner->ty)) {
@@ -912,11 +864,11 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
       if (!resolve_expr(S, e->u.find_.inner)) return 0;
       if (e->u.find_.inner->ty.kind != OL_TY_PTR) {
         sema_err(S, e->line,
-                  "find expects a ptr value (e.g. string literal, or load<x> where x holds ptr)");
+                  "find expects a ptr value (e.g. string literal, or load[x] where x holds ptr)");
         return 0;
       }
       if (S->ref_bind_depth == 0) {
-        sema_err(S, e->line, "bare find<...> not allowed; use <T>find<...> in let/ref");
+        sema_err(S, e->line, "bare find[...] not allowed; use <T>find[...] in let/ref");
         return 0;
       }
       type_make_untyped_ref(&e->ty);
@@ -925,11 +877,11 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
     case OL_EX_LOAD: {
       if (!resolve_expr(S, e->u.load_.inner)) return 0;
       if (!type_is_ref(&e->u.load_.inner->ty)) {
-        sema_err(S, e->line, "load expects a reference (name, field, index, or <T>find<...>)");
+        sema_err(S, e->line, "load expects a reference (name, field, index, or <T>find[...])");
         return 0;
       }
       if (type_ref_elem(&e->u.load_.inner->ty)->kind == OL_TY_VOID) {
-        sema_err(S, e->line, "cannot load untyped reference; use <T>... for a typed view first");
+        sema_err(S, e->line, "cannot load untyped reference; use (T)... for a typed view first");
         return 0;
       }
       type_copy(&e->ty, type_ref_elem(&e->u.load_.inner->ty));
@@ -944,33 +896,44 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
       return 1;
     }
     case OL_EX_ALLOC: {
-      if (e->u.alloc_.bitwidth_is_sizeof) {
-        if (!type_is_valid(S->prog, &e->u.alloc_.sizeof_bw_ty) || e->u.alloc_.sizeof_bw_ty.kind == OL_TY_VOID) {
-          sema_err(S, e->line, "invalid sizeof type in allocator width");
-          return 0;
-        }
+      if (e->u.alloc_.init) {
+        if (!resolve_expr(S, e->u.alloc_.init)) return 0;
         {
-          uint32_t b = ty_size_bytes(S->prog, &e->u.alloc_.sizeof_bw_ty) * 8u;
-          if (b == 0u) {
-            sema_err(S, e->line, "allocator sizeof width is zero");
+          uint32_t ib = ty_size_bytes(S->prog, &e->u.alloc_.init->ty) * 8u;
+          if (ib != e->u.alloc_.bitwidth) {
+            sema_err(S, e->line, "initializer bit width must match allocator bitwidth");
             return 0;
           }
-          e->u.alloc_.bitwidth = b;
-          e->u.alloc_.bitwidth_is_sizeof = 0;
         }
       }
-      if (e->u.alloc_.init && !resolve_expr(S, e->u.alloc_.init)) return 0;
       type_make_untyped_ref(&e->ty);
       return 1;
     }
     case OL_EX_ADDR: {
-      SymSlot *sl = lookup_sym(S, e->u.addr.name);
+      OlExpr *in = e->u.addr.inner;
+      const char *name;
+      SymSlot *sl;
+      if (!in) {
+        sema_err(S, e->line, "addr missing operand");
+        return 0;
+      }
+      if (in->kind != OL_EX_VAR) {
+        sema_err(S, e->line, "addr[...] currently requires a simple name inside [...]");
+        return 0;
+      }
+      name = in->u.var_name;
+      sl = lookup_sym(S, name);
       if (sl) {
+        if (!resolve_expr(S, in)) return 0;
+        if (!type_is_ref(&in->ty)) {
+          sema_err(S, e->line, "addr operand must be storage (reference type)");
+          return 0;
+        }
         e->u.addr.addr_kind = sl->is_file_global ? OL_ADDR_GLOBAL : OL_ADDR_LOCAL;
         e->ty.kind = OL_TY_PTR;
         return 1;
       }
-      if (ol_program_find_extern(S->prog, e->u.addr.name) >= 0 || find_func(S->prog, e->u.addr.name)) {
+      if (ol_program_find_extern(S->prog, name) >= 0 || find_func(S->prog, name)) {
         e->u.addr.addr_kind = OL_ADDR_SYMBOL;
         e->ty.kind = OL_TY_PTR;
         return 1;
@@ -1042,7 +1005,83 @@ static int resolve_expr(SemaCtx *S, OlExpr *e) {
 
 static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s);
 
-/* let name1<T1> ... let nameN<TN> rhs_ref: rhs must be a reference; innermost name is next to rhs. */
+/* Fill OlLetBinding.ty from stack/data/… views, initializer, sizeof width, ref-bind, or ref-chain rhs. */
+static int apply_alloc_expr_to_let_bindings(SemaCtx *S, OlLetBinding *bd, size_t n, OlExpr *re, int line) {
+  OlExpr *init_e;
+  if (!re || re->kind != OL_EX_ALLOC) return 1;
+  if (!resolve_expr(S, re)) return 0;
+  init_e = re->u.alloc_.init;
+  if (n > 1u) {
+    sema_err(S, line,
+              "one name per storage placement; use chained let (let a let b x) for aliases, or a struct for multiple fields");
+    return 0;
+  }
+  if (n == 1u) {
+    if (bd[0].has_ty) return 1;
+    if (init_e) {
+      if (!resolve_expr(S, init_e)) return 0;
+      type_copy(&bd[0].ty, &init_e->ty);
+      bd[0].has_ty = 1;
+      return 1;
+    }
+    /* No initializer: untyped storage blob (element void); use `let v <T> name` for a typed view. */
+    bd[0].ty.kind = OL_TY_VOID;
+    bd[0].has_ty = 1;
+    return 1;
+  }
+  return 0;
+}
+
+static int fill_let_binding_names_from_rhs(SemaCtx *S, OlStmt *s) {
+  OlExpr *re = s->u.let_.ref_expr;
+  OlLetBinding *bd = s->u.let_.bindings;
+  size_t n = s->u.let_.binding_count;
+  size_t bi;
+  if (!re) return 1;
+  if (re->kind == OL_EX_ALLOC) return apply_alloc_expr_to_let_bindings(S, bd, n, re, re->line);
+  if (re->kind == OL_EX_REF_BIND) {
+    if (n != 1u) {
+      sema_err(S, s->line, "let with ref expression allows only one binding");
+      return 0;
+    }
+    if (!bd[0].has_ty) {
+      if (re->u.ref_bind.to.kind == OL_TY_VOID) {
+        sema_err(S, s->line, "let needs element type on <T> ref");
+        return 0;
+      }
+      type_copy(&bd[0].ty, &re->u.ref_bind.to);
+      bd[0].has_ty = 1;
+    }
+    return 1;
+  }
+  if (re->kind == OL_EX_VAR) {
+    if (!bd[0].has_ty) {
+      OlExpr *cur = re;
+      if (!resolve_expr(S, cur)) return 0;
+      if (!type_is_ref(&cur->ty)) {
+        sema_err(S, s->line, "let ref-chain needs a reference on the right");
+        return 0;
+      }
+      if (type_ref_elem(&cur->ty)->kind == OL_TY_VOID) {
+        sema_err(S, s->line, "cannot bind to untyped reference");
+        return 0;
+      }
+      for (bi = 0; bi < n; ++bi) {
+        type_copy(&bd[bi].ty, type_ref_elem(&cur->ty));
+        bd[bi].has_ty = 1;
+      }
+    }
+    return 1;
+  }
+  return 1;
+}
+
+static int fill_global_let_bindings(SemaCtx *S, OlGlobalDef *gd) {
+  if (!gd->ref_expr || gd->ref_expr->kind != OL_EX_ALLOC) return 1;
+  return apply_alloc_expr_to_let_bindings(S, gd->bindings, gd->binding_count, gd->ref_expr, gd->ref_expr->line);
+}
+
+/* let name1 ... let nameN rhs_ref: rhs must be a reference; innermost name is next to rhs. */
 static int check_let_ref_chain_views(SemaCtx *S, OlStmt *s) {
   OlExpr *cur;
   OlExpr *layers;
@@ -1066,11 +1105,6 @@ static int check_let_ref_chain_views(SemaCtx *S, OlStmt *s) {
   }
   for (i = n; i > 0u; --i) {
     idx = i - 1u;
-    if (!bd[idx].has_ty) {
-      sema_err(S, s->line, "let requires name<Type> with a type");
-      free(layers);
-      return 0;
-    }
     if (lookup_global_type(S->prog, bd[idx].name)) {
       sema_err(S, s->line, "let name shadows global");
       free(layers);
@@ -1128,21 +1162,18 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
         OlExpr *init_e;
         int is_aggregate = 0;
         if (!re) {
-          sema_err(S, s->line, "let requires @stack<...>(...) or a ref expression");
+          sema_err(S, s->line, "let requires stack[...] or a ref expression");
           return 0;
         }
+        if (!fill_let_binding_names_from_rhs(S, s)) return 0;
         if (re->kind == OL_EX_REF_BIND) {
           if (s->u.let_.binding_count != 1) {
-            sema_err(S, s->line, "let with <...>ref allows only one binding");
-            return 0;
-          }
-          if (!s->u.let_.bindings[0].has_ty) {
-            sema_err(S, s->line, "let requires name<Type> with a type");
+            sema_err(S, s->line, "let with ref expression allows only one binding");
             return 0;
           }
           if (re->u.ref_bind.to.kind != OL_TY_VOID &&
               !type_eq(&re->u.ref_bind.to, &s->u.let_.bindings[0].ty)) {
-            sema_err(S, s->line, "let binding type must match inner <Type> ref");
+            sema_err(S, s->line, "let binding type must match inner (Type) ref");
             return 0;
           }
           for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
@@ -1156,18 +1187,6 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
             }
           }
           if (!resolve_expr(S, re)) return 0;
-          if (re->u.ref_bind.to.kind != OL_TY_VOID && re->u.ref_bind.inner->kind == OL_EX_ADDR) {
-            SymSlot *csl = lookup_sym(S, re->u.ref_bind.inner->u.addr.name);
-            uint32_t psz, tsz;
-            if (csl) {
-              psz = sym_pointee_storage_bytes(S, csl);
-              tsz = ty_size_bytes(S->prog, &re->u.ref_bind.to);
-              if (psz != 0u && psz != tsz) {
-                sema_err(S, s->line, "indirect let: binding type size must match addressed storage");
-                return 0;
-              }
-            }
-          }
           if (!bind_sym_indirect(S, s->u.let_.bindings[0].name, &s->u.let_.bindings[0].ty, 0)) {
             sema_err(S, s->line, "duplicate let or oom");
             return 0;
@@ -1179,14 +1198,13 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
           break;
         }
         if (re->kind != OL_EX_ALLOC) {
-          sema_err(S, s->line, "local let requires @stack<...>(...) or <[Type]>ref (e.g. <i32>find<...>)");
+          sema_err(S, s->line, "local let requires stack[...] or <Type> ref (e.g. <i32>find[...])");
           return 0;
         }
         if (re->u.alloc_.alloc != OL_ALLOC_STACK) {
-          sema_err(S, s->line, "local let must be @stack<bits>(...)");
+          sema_err(S, s->line, "local let must be stack[...]");
           return 0;
         }
-        if (!resolve_expr(S, re)) return 0;
         bw = re->u.alloc_.bitwidth;
         init_e = re->u.alloc_.init;
         if (s->u.let_.binding_count == 0 || s->u.let_.binding_count > OL_MAX_LET_BINDINGS) {
@@ -1199,53 +1217,57 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
             return 0;
           }
           if (!s->u.let_.bindings[bi].has_ty) {
-            sema_err(S, s->line, "let requires a type in name<Type>");
+            sema_err(S, s->line, "let: could not infer binding types from stack[...]");
             return 0;
           }
-          if (!type_is_valid(S->prog, &s->u.let_.bindings[bi].ty) || s->u.let_.bindings[bi].ty.kind == OL_TY_VOID) {
+          if (!type_is_valid(S->prog, &s->u.let_.bindings[bi].ty)) {
             sema_err(S, s->line, "invalid let type");
             return 0;
           }
         }
-        if (s->u.let_.binding_count == 1) {
+        {
           OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
-          if (t0->kind == OL_TY_ALIAS) {
-            int tdi = ol_program_find_typedef(S->prog, t0->alias_name);
-            if (tdi >= 0) {
-              OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
-              if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-                is_aggregate = 1;
-              }
+          if (t0->kind == OL_TY_VOID) {
+            if (init_e) {
+              sema_err(S, s->line, "untyped stack placement cannot have an initializer; use a typed view or a separate let");
+              return 0;
             }
-          }
-        } else {
-          for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
-            OlTypeRef *t = &s->u.let_.bindings[bi].ty;
-            if (t->kind == OL_TY_ALIAS) {
-              int tdi = ol_program_find_typedef(S->prog, t->alias_name);
+            sum_bits = bw;
+          } else {
+            if (t0->kind == OL_TY_ALIAS) {
+              int tdi = ol_program_find_typedef(S->prog, t0->alias_name);
               if (tdi >= 0) {
                 OlTypeDefKind tdk = S->prog->typedefs[(size_t)tdi].kind;
                 if (tdk == OL_TYPEDEF_STRUCT || tdk == OL_TYPEDEF_ARRAY) {
-                  sema_err(S, s->line, "multi-view let only supports scalar types");
-                  return 0;
+                  is_aggregate = 1;
                 }
               }
             }
+            {
+              uint32_t b = ty_size_bytes(S->prog, t0) * 8u;
+              if (b == 0) {
+                sema_err(S, s->line, "let type has zero size");
+                return 0;
+              }
+              sum_bits = b;
+            }
           }
-        }
-        for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
-          uint32_t b = ty_size_bytes(S->prog, &s->u.let_.bindings[bi].ty) * 8u;
-          if (b == 0) {
-            sema_err(S, s->line, "let type has zero size");
-            return 0;
-          }
-          sum_bits += b;
         }
         if (sum_bits != bw) {
-          sema_err(S, s->line, "let view sizes must sum to bitwidth");
+          sema_err(S, s->line, "let type size must match stack bitwidth");
           return 0;
         }
-        if (is_aggregate) {
+        if (s->u.let_.bindings[0].ty.kind == OL_TY_VOID) {
+          {
+            OlTypeRef v;
+            memset(&v, 0, sizeof(v));
+            v.kind = OL_TY_VOID;
+            if (!bind_sym(S, s->u.let_.bindings[0].name, &v, 0, 0)) {
+              sema_err(S, s->line, "duplicate let or oom");
+              return 0;
+            }
+          }
+        } else if (is_aggregate) {
           OlTypeRef *t0 = &s->u.let_.bindings[0].ty;
           uint32_t expect_bits = ty_size_bytes(S->prog, t0) * 8u;
           if (expect_bits != bw) {
@@ -1273,21 +1295,13 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
             sema_err(S, s->line, "initializer bit width must match let bitwidth");
             return 0;
           }
-          if (s->u.let_.binding_count == 1 &&
-              !type_eq(&init_e->ty, &s->u.let_.bindings[0].ty)) {
+          if (!type_eq(&init_e->ty, &s->u.let_.bindings[0].ty)) {
             sema_err(S, s->line, "let type mismatch");
             return 0;
           }
-          {
-            uint32_t off = 0;
-            for (bi = 0; bi < s->u.let_.binding_count; ++bi) {
-              uint32_t nb = ty_size_bytes(S->prog, &s->u.let_.bindings[bi].ty);
-              if (!bind_sym(S, s->u.let_.bindings[bi].name, &s->u.let_.bindings[bi].ty, 0, off)) {
-                sema_err(S, s->line, "duplicate let or oom");
-                return 0;
-              }
-              off += nb;
-            }
+          if (!bind_sym(S, s->u.let_.bindings[0].name, &s->u.let_.bindings[0].ty, 0, 0)) {
+            sema_err(S, s->line, "duplicate let or oom");
+            return 0;
           }
         }
         break;
@@ -1304,7 +1318,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
           return 0;
         }
         if (type_ref_elem(&t->ty)->kind == OL_TY_VOID) {
-          sema_err(S, s->line, "cannot store to untyped reference; use <T>... for a typed view first");
+          sema_err(S, s->line, "cannot store to untyped reference; use (T)... for a typed view first");
           return 0;
         }
         if (store_lvalue_is_rodata(S, t)) {
@@ -1317,7 +1331,7 @@ static int check_stmt(SemaCtx *S, const OlFuncDef *fn, OlStmt *s) {
           int aggcpy = 0;
           if (type_is_ref(&s->u.store_.val->ty) && type_eq(tel, type_ref_elem(&s->u.store_.val->ty)) &&
               typedef_is_aggregate(S->prog, tel, &aggcpy) && aggcpy) {
-            /* aggregate ref-to-ref copy: store<dst, src> */
+            /* aggregate ref-to-ref copy: store[dst, src] */
           } else if (!expr_is_value_ok(S, s->u.store_.val, "store value must be a value (or matching aggregate ref)")) {
             return 0;
           }
@@ -1478,6 +1492,26 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
         return 0;
       }
     }
+  }
+
+  for (i = 0; i < p->global_count; ++i) {
+    enter_scope(&S);
+    for (k = 0; k < (size_t)i; ++k) {
+      if (!bind_global_def(&S, p, &p->globals[k])) {
+        snprintf(err, err_len, "global bind oom");
+        exit_scope(&S);
+        return 0;
+      }
+    }
+    if (!fill_global_let_bindings(&S, &p->globals[i])) {
+      snprintf(err, err_len, "%s", S.err[0] ? S.err : "global let binding fill failed");
+      exit_scope(&S);
+      return 0;
+    }
+    exit_scope(&S);
+  }
+
+  for (i = 0; i < p->global_count; ++i) {
     if (!validate_global_def(p, &p->globals[i], err, err_len)) return 0;
   }
 
@@ -1513,13 +1547,13 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
       typedef_is_aggregate(p, &p->globals[i].bindings[0].ty, &is_agg);
     if (p->globals[i].ref_expr && p->globals[i].ref_expr->kind == OL_EX_ALLOC &&
         p->globals[i].ref_expr->u.alloc_.init) {
-      OlExpr *ginit = p->globals[i].ref_expr->u.alloc_.init;
-      uint32_t gbw = p->globals[i].ref_expr->u.alloc_.bitwidth;
-      if (!resolve_expr(&S, ginit)) {
+      OlExpr *ginit;
+      if (!resolve_expr(&S, p->globals[i].ref_expr)) {
         snprintf(err, err_len, "%s", S.err[0] ? S.err : "global init failed");
         exit_scope(&S);
         return 0;
       }
+      ginit = p->globals[i].ref_expr->u.alloc_.init;
       if (is_agg) {
         if (!type_eq(&ginit->ty, &p->globals[i].bindings[0].ty)) {
           snprintf(err, err_len, "global init type mismatch");
@@ -1527,11 +1561,6 @@ int ol_sema_check(OlProgram *p, char *err, size_t err_len) {
           return 0;
         }
       } else {
-        if (ty_size_bytes(p, &ginit->ty) * 8u != gbw) {
-          snprintf(err, err_len, "global initializer bit width must match bitwidth");
-          exit_scope(&S);
-          return 0;
-        }
         if (p->globals[i].binding_count == 1 &&
             !type_eq(&ginit->ty, &p->globals[i].bindings[0].ty)) {
           snprintf(err, err_len, "global init type mismatch");

@@ -34,7 +34,13 @@ make check
 
 ### 第一个程序
 
-在 `examples/linux_x86_64/programs` 里创建 `hello.ol`：
+建一个本地练习目录（已在仓库 `.gitignore` 中忽略），源码和生成的 ELF 放在同一目录下：
+
+```bash
+mkdir -p examples/linux_x86_64/programs/hello
+```
+
+创建 `examples/linux_x86_64/programs/hello/hello.ol`：
 
 ```olang
 extern i32 main() {
@@ -42,15 +48,16 @@ extern i32 main() {
 }
 ```
 
-编译运行：
+在项目根目录编译并运行（输出也在 `hello/` 下）：
 
 ```bash
-mkdir -p examples/linux_x86_64/out
-bash examples/linux_x86_64/olc -o examples/linux_x86_64/out/hello.elf examples/linux_x86_64/programs/hello.ol
-./examples/linux_x86_64/out/hello.elf
+bash examples/linux_x86_64/olc -o examples/linux_x86_64/programs/hello/hello.elf examples/linux_x86_64/programs/hello/hello.ol
+./examples/linux_x86_64/programs/hello/hello.elf
 echo $?
 # 42
 ```
+
+`make check` 按约定只编译 `examples/linux_x86_64/programs/ex_*.ol`；这里的 `hello/` 目录供你自行试验。
 
 ### 下一步
 
@@ -68,6 +75,6 @@ echo $?
 
 **Q: "标量需要初始值"？**
 ```olang
-let x<i32> @stack<32>(0i32);  // ✓
-// let y<i32> @stack<32>();   // ✗ 标量必须初始化
+let x stack[32, 0i32];  // ✓
+// let y stack[32];     // ✗ 标量栈槽需初始化式，或：let raw stack[32]; let y <i32> raw;
 ```

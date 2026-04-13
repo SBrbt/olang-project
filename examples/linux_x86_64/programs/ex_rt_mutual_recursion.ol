@@ -1,15 +1,15 @@
 i32 is_even(n: i32) {
-  if (load<n> == 0) {
+  if (load[n] == 0) {
     return 1;
   }
-  return is_odd(load<n> - 1);
+  return is_odd(load[n] - 1);
 }
 
 i32 is_odd(n: i32) {
-  if (load<n> == 0) {
+  if (load[n] == 0) {
     return 0;
   }
-  return is_even(load<n> - 1);
+  return is_even(load[n] - 1);
 }
 
 extern i32 main() {

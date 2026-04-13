@@ -47,7 +47,12 @@ static int kw_tok(const char *s) {
   if (strcmp(s, "addr") == 0) return TOK_KW_ADDR;
   if (strcmp(s, "find") == 0) return TOK_KW_FIND;
   if (strcmp(s, "sizeof") == 0) return TOK_KW_SIZEOF;
-  if (strcmp(s, "as") == 0) return TOK_KW_AS;
+  /* Storage placement (not malloc); longer names first where relevant. */
+  if (strcmp(s, "rodata") == 0) return TOK_KW_RODATA;
+  if (strcmp(s, "section") == 0) return TOK_KW_SECTION;
+  if (strcmp(s, "stack") == 0) return TOK_KW_STACK;
+  if (strcmp(s, "data") == 0) return TOK_KW_DATA;
+  if (strcmp(s, "bss") == 0) return TOK_KW_BSS;
   if (strcmp(s, "break") == 0) return TOK_KW_BREAK;
   if (strcmp(s, "continue") == 0) return TOK_KW_CONTINUE;
   if (strcmp(s, "true") == 0) return TOK_KW_TRUE;
@@ -456,4 +461,45 @@ void ol_lexer_next(OlLexer *L) {
       L->tok = TOK_EOF;
       return;
   }
+}
+
+void ol_lexer_snapshot(OlLexer *L, OlLexerSnap *s) {
+  s->pos = L->pos;
+  s->line = L->line;
+  s->tok = L->tok;
+  memcpy(s->ident, L->ident, sizeof(L->ident));
+  s->int_val = L->int_val;
+  s->int_suffix = L->int_suffix;
+  s->float_val = L->float_val;
+  s->float_suffix = L->float_suffix;
+  s->char_val = L->char_val;
+  s->str_val = L->str_val;
+  s->str_len = L->str_len;
+  L->str_val = NULL;
+  L->str_len = 0;
+}
+
+void ol_lexer_restore(OlLexer *L, OlLexerSnap *s) {
+  free(L->str_val);
+  L->str_val = NULL;
+  L->str_len = 0;
+  L->pos = s->pos;
+  L->line = s->line;
+  L->tok = s->tok;
+  memcpy(L->ident, s->ident, sizeof(L->ident));
+  L->int_val = s->int_val;
+  L->int_suffix = s->int_suffix;
+  L->float_val = s->float_val;
+  L->float_suffix = s->float_suffix;
+  L->char_val = s->char_val;
+  L->str_val = s->str_val;
+  L->str_len = s->str_len;
+  s->str_val = NULL;
+  s->str_len = 0;
+}
+
+void ol_lexer_snap_release(OlLexerSnap *s) {
+  free(s->str_val);
+  s->str_val = NULL;
+  s->str_len = 0;
 }

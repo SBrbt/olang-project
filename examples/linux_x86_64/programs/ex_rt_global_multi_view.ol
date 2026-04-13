@@ -1,26 +1,30 @@
-// Same layout as ex_rt_multi_view.ol: f32 + i32 in one 64-bit .data blob.
-let gx<f32> let gn<i32> @data<64>(0x0000002A3F800000u64);
+// Same layout as ex_rt_multi_view.ol: struct + stack[sizeof[...]] inside a function.
+type F32I32 = struct { x: f32, n: i32 };
 
 extern i32 main() {
-  if (load<gx> != 1.0f32) {
+  let s_raw stack[64];
+  let s <F32I32> s_raw;
+  store[s.x, 1.0f32];
+  store[s.n, 42i32];
+  if (load[s.x] != 1.0f32) {
     return 1;
   }
-  if (load<gn> != 42i32) {
+  if (load[s.n] != 42i32) {
     return 2;
   }
-  let gx2<f32> @stack<32>(load<gx> * 2.0f32);
-  let gn2<i32> @stack<32>(load<gn> + 8i32);
-  if (load<gx2> != 2.0f32) {
+  let x2 stack[32, load[s.x] * 2.0f32];
+  let n2 stack[32, load[s.n] + 8i32];
+  if (load[x2] != 2.0f32) {
     return 3;
   }
-  if (load<gn2> != 50i32) {
+  if (load[n2] != 50i32) {
     return 4;
   }
-  store<gx, 3.0f32>;
-  if (load<gn> != 42i32) {
+  store[s.x, 3.0f32];
+  if (load[s.n] != 42i32) {
     return 5;
   }
-  if (load<gx> != 3.0f32) {
+  if (load[s.x] != 3.0f32) {
     return 6;
   }
   return 0;

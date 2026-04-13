@@ -17,9 +17,8 @@
 #### Keywords
 
 - **Syntax / control:** `extern`, `let`, `if`, `else`, `while`, `break`, `continue`, `return`, `type`, `struct`, `array`
-- **Operations:** `cast`, `find`, `load`, `store`, `addr`, `sizeof`
+- **Operations:** `find`, `load`, `store`, `addr`, `sizeof`
 - **Types / literals:** `void`, `bool`, `ptr`, `true`, `false`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `f32`, `f64`, `b8`, `b16`, `b32`, `b64`
-- **Reserved, not a statement:** `as` (lexed as a keyword; no `as` syntax in the parser yet)
 
 #### Literals
 
@@ -52,8 +51,8 @@ type Point = struct { x: i32, y: i32 };
 
 #### Array
 ```olang
-type Ident = array<ElementType, Size>;
-type Int5 = array<i32, 5>;
+type Ident = array(ElementType, Size);
+type Int5 = array(i32, 5);
 ```
 
 > **Aggregate types** are arrays and structs. They can be initialized after declaration, unlike scalars (primitive types like `i32`, `bool`, etc.) which must be initialized at declaration.
@@ -64,7 +63,7 @@ type Int5 = array<i32, 5>;
 
 #### Precedence (high → low)
 
-1. `addr`, `cast<T>`, `find<…>`, `sizeof<…>`, `<[T]>`, `load<…>`, `[]`, `.`, `()` — call
+1. `addr`, builtin `T(…)` (**value** cast), `find[…]`, `sizeof[Type]`, `load[…]`, `[]`, `.`, `()` — call (ref position also has **`<Type>…`**; see **Reference expressions** below — do not confuse with `T(…)` value cast)
 2. `!`, `~`, `-` — unary (`~` only for `b*`; `!` only for `bool`)
 3. `*`, `/`, `%`
 4. `+`, `-`
@@ -82,31 +81,37 @@ type Int5 = array<i32, 5>;
 **General expression** atoms / prefixes:
 
 ```olang
-cast<T>(expr)           // explicit conversion; parentheses contain a full expression (see [types](types.md))
-sizeof<T>               // compile-time constant: bit width of `T`; expression type is `u64`
-load<name>              // read binding `name` (`name` is an identifier; see semantic rules)
-addr Ident              // address: local, then global `let`, then `extern` or function symbol (rvalue `ptr`)
-find<Expr>              // `Expr` must yield `ptr`; same form as in RefExpr (see ref model)
+i32(expr)               // explicit value conversion; inner is a full expression (see [types](types.md))
+sizeof[Type]            // compile-time constant: bit width of `Type`; expression type is `u64`
+load[expr]              // read through a reference expression (see semantic rules)
+addr [ RefExpr ]         // address of operand storage (rvalue `ptr`; sema: simple name for now)
+find[Expr]              // `Expr` must yield `ptr`; same form as in RefExpr (see ref model)
 ```
 
-**Reference expression `RefExpr`** (used after `let name<T>`, and as the inner operand of `cast<T>(…)` in ref position—the inner `cast` is **not** a full `expr`):
+**Right-hand side of `let` (grammar: `RefExpr`)**
+
+**`let` does not carry a type.** After **`let`** comes the **name**; **what follows must be a reference**, not an arbitrary expression. The forms below are for lookup:
 
 ```olang
 ( RefExpr )
-find<Expr>              // `Expr` must be `ptr` rvalue; compile-time ref to a memory object (see [ref model](../internals/specs/olang-refmodel.md))
-addr Ident
-@stack|@data|@bss|@rodata|@section("…") <Int|sizeof<T>> ( [Expr] )   // `@stack` only inside functions
-<[T]> RefExpr           // attach static type to inner ref; use `<void>` for untyped `ptr` view
-cast<T>(RefExpr)        // differs from general `cast`: inner must be `RefExpr`
+find[Expr]              // `Expr` must be `ptr` rvalue; compile-time ref to a memory object (see [ref model](../internals/specs/olang-refmodel.md))
+addr [ RefExpr ]
+stack[ … ]              // stack allocation; functions only: [bit width, optional initializer]
+data / bss / rodata / section[ … ]   // globals; see **Variable binding**
+< Type > RefExpr        // **new** reference to the same storage as inner; element type `Type` is bound on **that new** reference — not `T(expr)` value cast
 ```
 
-**`store` is a statement**, not `store<…>(…)` inside a general expression:
+**`T(expr)` vs `<Type> …`:** the former converts a **value**; the latter wraps a **reference** and yields a **new** reference named by **`let`**. The **`inner`** of **`<Type>`** must be a **reference**, not **`addr[…]`** — see [ref model](../internals/specs/olang-refmodel.md).
+
+**`stack[…]`** (functions only) takes **one** `let` name per placement. Brackets are **`[`** an **unsuffixed decimal bit width** **`,`** optional **initializer expression** **`]`**. The placement expression is an **untyped** reference; the binding’s element type comes from the **initializer**, or from **`let v <T> raw`** after a placement **without** initializer. **`bss`** is **`[`** bit width **`]`** only (no initializer). **`section`** is **`[`** string **`,`** bit width **`,`** optional init **`]`**. **Do not** list multiple view types inside the brackets; use **`let a let b (rhs)`**, **`struct`** fields, or **`let n <T>x`**.
+
+**`store` is a statement**, not nested inside a general expression:
 
 ```olang
-store<lvalue, expr>;    // lvalue: name, `a.b`, or `a[i]`; comma, then value, then `>`
+store[lvalue, expr];    // lvalue: name, `a.b`, or `a[i]`; comma, then value, then `];`
 ```
 
-Named storage is introduced only by `let` with an **allocator** (see below). Literals and `load` / `addr` are **values**. Indirect bindings (`let …` with `find` / `<T>addr`) are checked as pointer slots with an element type; there is **no** `deref` keyword statement. The code generator may spill subexpressions to stack slots as an implementation detail.
+Named storage is introduced only by `let` with a **storage placement** form (see below). Literals and `load` / `addr` are **values**. Indirect bindings (`let …` with `find` / `<T>…`) use pointer slots with a logical element type; reads and writes use `load` / `store` on those names. The code generator may spill subexpressions to stack slots as an implementation detail.
 
 ---
 
@@ -114,22 +119,24 @@ Named storage is introduced only by `let` with an **allocator** (see below). Lit
 
 #### Variable binding (named storage)
 
-Inside a function, only **`@stack`** is allowed. Each binding is `Ident<Type>`. One or more bindings may share a single stack allocation; **each additional binding is introduced with the keyword `let`** (e.g. `let x<f32> let n<i32> @stack<64>(...)`). `@stack<bits>` is the **total size in bits** (literal or `sizeof<Type>`); the sum of all binding types’ sizes (in bits) must equal that value. There is **no** `from` keyword between bindings and `@stack`. Layout is a tight pack in declaration order.
+Inside a function, only **`stack[...]`** is allowed for stack-backed storage. Each **`stack[…]`** introduces **one** name. The binding segment lists **identifiers only**: with an initializer, the element type is inferred; without, the slot is **untyped** until **`let v <T> raw`**. **Several names** on the same logical storage use **`let a let b (rhs)`**, **`struct`**, or **`let n <T>x`**.
 
 ```olang
-let x<i32> @stack<32>(Expr);                    // scalar: initializer required; bit width matches type
-let x<f32> let n<i32> @stack<64>(Expr);             // e.g. f32 + i32 views on one 64-bit object
-let s<MyStruct> @stack<N>();                  // aggregate: optional init; N = 8 * sizeof(MyStruct)
+let x stack[32, 42i32];                 // 32 bits, initializer fixes type
+let raw stack[32];
+let y <i32> raw;                        // no init: raw blob + view
+let p_raw stack[128];
+let p <Pair> p_raw;                     // aggregate: blob + view
+let t stack[64, expr];                  // explicit width + initializer
 ```
 
-At file scope, use a **global allocator** (not `@stack`). Like local `let`, you may list **one or more** `Ident<Type>` sharing one static blob; after `@data` / `@bss` / `@rodata` / `@section("name")` comes **`<bits>`** (total bit width or `sizeof<...>`), and the sum of binding sizes in bits must match. With multiple names, only **scalar** types are allowed; a single binding may be an aggregate (struct/array). The **first** binding name is the linker symbol for the object; other names refer to offsets into that symbol.
+At file scope (not **`stack`**): **`data`** / **`rodata`** use the same **`[`** bit width **`,`** optional init **`]`** form; **`bss`** is **`[`** bit width **`]`** only (untyped blob); **`section`** is **`["name",`** bit width **`,`** optional init **`]`**. Use an initializer at file scope when you need a typed scalar without a separate **`let … <T> …`** (not available at top level). Layouts with multiple fields use **`struct`** types or separate globals.
 
 ```olang
-let x<i32> @data<32>(Expr);                    // .data
-let y<i64> @bss<64>();                        // .bss (no initializer)
-let c<i32> @rodata<32>(Expr);                  // .rodata (constant initializer)
-let z<i32> @section("name")<32>(Expr);         // custom section
-let gx<f32> let gn<i32> @data<64>(Expr);            // heterogeneous scalars, one 64-bit blob (example)
+let gcount data[32, 10];               // .data
+let c rodata[32, 7u32];                // .rodata
+let y bss[64];                         // .bss, untyped blob
+let z section[".mysec", 32, 0i32];     // custom section
 ```
 
 #### Writes (no `=` assignment)
@@ -137,7 +144,7 @@ let gx<f32> let gn<i32> @data<64>(Expr);            // heterogeneous scalars, on
 There is **no** `Expr = Expr` statement. Writes use **`store`**:
 
 ```olang
-store<lvalue, expr>;   // lvalue: name, field, or subscript (see above)
+store[lvalue, expr];   // lvalue: name, field, or subscript (see above)
 ```
 
 #### Control Flow
@@ -180,7 +187,7 @@ Param  ::= Ident: Type
 
 ### Limitations
 
-- Scalar `@stack` / global `let` must have an initializer (or use `@bss` without init where allowed)
+- Scalar **`stack`** / writable global `let` must follow initializer rules (or use **`bss`** without init where allowed)
 - No compound assignment (`+=`, `-=`)
 - No increment/decrement (`++`, `--`)
 - No array bounds checking

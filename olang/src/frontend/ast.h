@@ -75,15 +75,15 @@ typedef enum OlExprKind {
   OL_EX_BNOT,
   OL_EX_BINARY,
   OL_EX_CALL,
-  OL_EX_CAST,       /* T<expr> — runtime conversion (expr or RefExpr in ref position); AST cast_. */
+  OL_EX_CAST,       /* T(expr) — runtime conversion (expr or RefExpr in ref position); AST cast_. */
   OL_EX_ADDR,
   OL_EX_FIELD,
   OL_EX_INDEX,
   OL_EX_REF_BIND,   /* <T> inner — new typed reference; inner is ptr or untyped ref from find/@alloc */
   OL_EX_FIND,       /* find<Expr> — untyped reference; inner must be ptr rvalue (E) */
   OL_EX_LOAD,       /* load<Expr> — Expr must be typed reference; yields element value */
-  OL_EX_SIZEOF_TY,  /* sizeof<Type> */
-  OL_EX_ALLOC       /* @stack|@data|...<bits>(init) — untyped reference */
+  OL_EX_SIZEOF_TY,  /* sizeof[Type] */
+  OL_EX_ALLOC       /* stack|data|bss|rodata|section [bit[, init?]] — untyped ref */
 } OlExprKind;
 
 typedef enum OlBinOp {
@@ -149,7 +149,7 @@ struct OlExpr {
       OlExpr *inner;
     } cast_;
     struct {
-      char name[128];
+      OlExpr *inner; /* ref head: currently simple name (OL_EX_VAR); addr[...] yields ptr */
       OlAddrKind addr_kind; /* filled by sema */
     } addr;
     struct {
@@ -177,10 +177,8 @@ struct OlExpr {
     } sizeof_ty;
     struct {
       OlAllocKind alloc;
-      int bitwidth_is_sizeof; /* 1: fold sizeof_bw_ty into bitwidth in sema */
-      OlTypeRef sizeof_bw_ty;
       uint32_t bitwidth;
-      OlExpr *init;
+      OlExpr *init; /* optional for stack; data/rodata/section may omit (zero-filled in codegen) */
       char custom_section[128];
     } alloc_;
   } u;
@@ -190,7 +188,7 @@ struct OlExpr {
 
 typedef struct OlLetBinding {
   char name[128];
-  int has_ty; /* 0: name<> — invalid in let; parser may still accept */
+  int has_ty; /* 0: fill in sema from allocator views or inference */
   OlTypeRef ty;
 } OlLetBinding;
 
