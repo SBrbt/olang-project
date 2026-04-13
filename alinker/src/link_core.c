@@ -92,6 +92,10 @@ static int append_to_section(OobjObject *obj, int sec_idx, const uint8_t *src, s
   }
   s = &obj->sections[sec_idx];
   *base_off = (uint64_t)s->data_len;
+  if (src_len > SIZE_MAX - s->data_len) {
+    snprintf(err, err_len, "merge: section size overflow");
+    return 0;
+  }
   next = (uint8_t *)realloc(s->data, s->data_len + src_len);
   if (!next) {
     snprintf(err, err_len, "merge: oom section grow");
@@ -177,6 +181,12 @@ static int merge_objects(const LinkScript *script, OobjObject *merged, char *err
     uint64_t *sec_map_base = NULL;
     oobj_init(&in);
     if (!oobj_read_file(script->inputs[i], &in, err, err_len)) {
+      oobj_free(merged);
+      oobj_free(&in);
+      return 0;
+    }
+    if (in.section_count > SIZE_MAX / sizeof(int) || in.section_count > SIZE_MAX / sizeof(uint64_t)) {
+      snprintf(err, err_len, "merge: section map too large");
       oobj_free(merged);
       oobj_free(&in);
       return 0;
@@ -430,6 +440,7 @@ static int make_flat_image_load_groups(const OobjObject *merged, const LinkScrip
   uint8_t *stub_heap = NULL;
   uint64_t pos = stub_len;
   uint8_t *buf;
+  size_t total_len;
   uint64_t entry_off;
   size_t gi, k;
   size_t ng = script->load_group_count;
@@ -445,8 +456,13 @@ static int make_flat_image_load_groups(const OobjObject *merged, const LinkScrip
     snprintf(err, err_len, "image: entry symbol is undefined");
     return 0;
   }
+  if (payload_len > (uint64_t)(SIZE_MAX - stub_len)) {
+    snprintf(err, err_len, "image: size overflow");
+    return 0;
+  }
+  total_len = stub_len + (size_t)payload_len;
   entry_off = layout->sec_base[(size_t)merged->symbols[si].section_index] + merged->symbols[si].value;
-  buf = (uint8_t *)malloc(stub_len + payload_len);
+  buf = (uint8_t *)malloc(total_len);
   if (!buf) {
     snprintf(err, err_len, "image: oom");
     return 0;
@@ -470,25 +486,37 @@ static int make_flat_image_load_groups(const OobjObject *merged, const LinkScrip
     const LinkLoadGroup *g = &script->load_groups[gi];
     for (k = 0; k < g->section_count; ++k) {
       int sec_i = find_section_by_name(merged, g->section_names[k]);
+      size_t sec_len;
       if (sec_i < 0) continue;
-      memcpy(buf + pos, merged->sections[(size_t)sec_i].data, merged->sections[(size_t)sec_i].data_len);
-      pos += merged->sections[(size_t)sec_i].data_len;
+      sec_len = merged->sections[(size_t)sec_i].data_len;
+      if (sec_len > total_len - (size_t)pos) {
+        free(buf);
+        snprintf(err, err_len, "image: section copy overflow");
+        return 0;
+      }
+      memcpy(buf + pos, merged->sections[(size_t)sec_i].data, sec_len);
+      pos += sec_len;
     }
     if (gi + 1u < ng) {
       uint64_t al = group_align_after_value(script, gi);
       uint64_t pay_so_far = pos - stub_len;
       uint64_t pad = align_up64(stub_len + pay_so_far, al) - (stub_len + pay_so_far);
+      if (pad > (uint64_t)(total_len - (size_t)pos)) {
+        free(buf);
+        snprintf(err, err_len, "image: pad overflow");
+        return 0;
+      }
       if (pad > 0) memset(buf + pos, 0, (size_t)pad);
       pos += pad;
     }
   }
-  if (pos != stub_len + payload_len) {
+  if ((size_t)pos != total_len) {
     free(buf);
     snprintf(err, err_len, "image: internal flat size mismatch");
     return 0;
   }
   *raw_out = buf;
-  *raw_len_out = stub_len + payload_len;
+  *raw_len_out = total_len;
   return 1;
 }
 

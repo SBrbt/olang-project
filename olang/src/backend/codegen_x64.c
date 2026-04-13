@@ -931,7 +931,12 @@ static int gen_expr(CG *g, OlExpr *e) {
     case OL_EX_CALL: {
       size_t i;
       size_t stack_args = 0;
-      int *slots = (int *)malloc(e->u.call.arg_count * sizeof(int));
+      int *slots;
+      if (e->u.call.arg_count > SIZE_MAX / sizeof(int)) {
+        cg_err(g, "too many call arguments");
+        return -1;
+      }
+      slots = (int *)malloc(e->u.call.arg_count * sizeof(int));
       if (!slots) return -1;
       for (i = 0; i < e->u.call.arg_count; ++i) {
         slots[i] = gen_expr(g, e->u.call.args[i]);
@@ -968,6 +973,10 @@ static int gen_expr(CG *g, OlExpr *e) {
       emit_call_sym(g, sym_for_fn_ref(g, e->u.call.callee));
       /* Clean up pushed stack args */
       if (stack_args > 0) {
+        if (stack_args > (size_t)INT32_MAX / 8u) {
+          cg_err(g, "too many call arguments for stack cleanup");
+          return -1;
+        }
         int32_t cleanup = (int32_t)(stack_args * 8);
         tx_copy(g, (uint8_t[]){0x48, 0x81, 0xc4}, 3); /* add rsp, imm32 */
         tx_copy(g, (uint8_t *)&cleanup, 4);

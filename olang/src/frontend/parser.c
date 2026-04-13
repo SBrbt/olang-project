@@ -1541,6 +1541,10 @@ static int parse_typedef(ParseCtx *C) {
       errf(C, "array count");
       return 0;
     }
+    if (C->L->int_val <= 0 || C->L->int_val > 4294967295LL) {
+      errf(C, "array count out of range");
+      return 0;
+    }
     count = (unsigned)C->L->int_val;
     if (!lex_next(C)) return 0;
     if (!expect(C, TOK_RPAREN)) return 0;

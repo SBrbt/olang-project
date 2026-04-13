@@ -1,6 +1,8 @@
 #include "oobj.h"
 
+#include <errno.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,8 +73,10 @@ static int parse_hex_bytes(const char *hex, uint8_t **out, size_t *out_len) {
 
 static char *bytes_to_hex(const uint8_t *data, size_t len) {
   static const char *lut = "0123456789abcdef";
-  char *out = (char *)malloc(len * 2 + 1);
+  char *out;
   size_t i;
+  if (len > (SIZE_MAX - 1u) / 2u) return NULL;
+  out = (char *)malloc(len * 2 + 1);
   if (!out) return NULL;
   for (i = 0; i < len; ++i) {
     out[i * 2] = lut[(data[i] >> 4) & 0xf];
@@ -83,8 +87,10 @@ static char *bytes_to_hex(const uint8_t *data, size_t len) {
 }
 
 int oobj_append_section(OobjObject *obj, const char *name, uint32_t align, uint32_t flags, const uint8_t *data, size_t data_len) {
-  OobjSection *next = (OobjSection *)realloc(obj->sections, (obj->section_count + 1) * sizeof(OobjSection));
+  OobjSection *next;
   OobjSection *s;
+  if (obj->section_count > (SIZE_MAX / sizeof(OobjSection)) - 1u) return 0;
+  next = (OobjSection *)realloc(obj->sections, (obj->section_count + 1) * sizeof(OobjSection));
   if (!next) return 0;
   obj->sections = next;
   s = &obj->sections[obj->section_count];
@@ -108,8 +114,10 @@ int oobj_append_section(OobjObject *obj, const char *name, uint32_t align, uint3
 }
 
 int oobj_append_symbol(OobjObject *obj, const char *name, int32_t section_index, uint64_t value, int is_global) {
-  OobjSymbol *next = (OobjSymbol *)realloc(obj->symbols, (obj->symbol_count + 1) * sizeof(OobjSymbol));
+  OobjSymbol *next;
   OobjSymbol *s;
+  if (obj->symbol_count > (SIZE_MAX / sizeof(OobjSymbol)) - 1u) return 0;
+  next = (OobjSymbol *)realloc(obj->symbols, (obj->symbol_count + 1) * sizeof(OobjSymbol));
   if (!next) return 0;
   obj->symbols = next;
   s = &obj->symbols[obj->symbol_count];
@@ -124,8 +132,10 @@ int oobj_append_symbol(OobjObject *obj, const char *name, int32_t section_index,
 }
 
 int oobj_append_reloc(OobjObject *obj, uint32_t section_index, uint64_t offset, const char *symbol_name, OobjRelocType type, int64_t addend) {
-  OobjReloc *next = (OobjReloc *)realloc(obj->relocs, (obj->reloc_count + 1) * sizeof(OobjReloc));
+  OobjReloc *next;
   OobjReloc *r;
+  if (obj->reloc_count > (SIZE_MAX / sizeof(OobjReloc)) - 1u) return 0;
+  next = (OobjReloc *)realloc(obj->relocs, (obj->reloc_count + 1) * sizeof(OobjReloc));
   if (!next) return 0;
   obj->relocs = next;
   r = &obj->relocs[obj->reloc_count];
@@ -175,90 +185,47 @@ static int split_pipe_fields(char *line, char **fields, int maxf) {
   return n;
 }
 
-static int oobj_read_body_v1(FILE *f, char *line, OobjObject *out, char *err, size_t err_len, unsigned base_line) {
-  unsigned line_no = base_line - 1u;
-  while (fgets(line, OOBJ_LINE_CAP, f)) {
-    char kind[32];
-    line_no++;
-    if (line[0] == '\n' || line[0] == '#') continue;
-    if (sscanf(line, "%31s", kind) != 1) continue;
-    if (strcmp(kind, "target") == 0) {
-      char t[128];
-      if (sscanf(line, "target %127s", t) == 1) snprintf(out->target, sizeof(out->target), "%s", t);
-    } else if (strcmp(kind, "section") == 0) {
-      char name[128];
-      unsigned align, flags;
-      int nch = 0;
-      uint8_t *data = NULL;
-      size_t data_len = 0;
-      char *hexp;
-      size_t hlen;
-      if (sscanf(line, "section %127s %u %u%n", name, &align, &flags, &nch) < 3) {
-        snprintf(err, err_len, "oobj v1 line %u: bad section record", line_no);
-        oobj_free(out);
-        return 0;
-      }
-      hexp = line + nch;
-      while (*hexp == ' ' || *hexp == '\t') hexp++;
-      hlen = strlen(hexp);
-      while (hlen > 0 && (hexp[hlen - 1] == '\n' || hexp[hlen - 1] == '\r')) hlen--;
-      hexp[hlen] = '\0';
-      if (!parse_hex_bytes(hexp, &data, &data_len)) {
-        snprintf(err, err_len, "oobj v1 line %u: bad section hex", line_no);
-        oobj_free(out);
-        return 0;
-      }
-      if (!oobj_append_section(out, name, (uint32_t)align, (uint32_t)flags, data, data_len)) {
-        free(data);
-        snprintf(err, err_len, "oobj v1 line %u: oom section append", line_no);
-        oobj_free(out);
-        return 0;
-      }
-      free(data);
-    } else if (strcmp(kind, "symbol") == 0) {
-      char name[128], bind[16];
-      int sec = -1;
-      unsigned long long value = 0;
-      if (sscanf(line, "symbol %127s %d %llu %15s", name, &sec, &value, bind) != 4) {
-        snprintf(err, err_len, "oobj v1 line %u: bad symbol record", line_no);
-        oobj_free(out);
-        return 0;
-      }
-      if (!oobj_append_symbol(out, name, sec, (uint64_t)value, strcmp(bind, "global") == 0)) {
-        snprintf(err, err_len, "oobj v1 line %u: oom symbol append", line_no);
-        oobj_free(out);
-        return 0;
-      }
-    } else if (strcmp(kind, "reloc") == 0) {
-      unsigned sec = 0;
-      unsigned long long off = 0;
-      char sym[128], type[16];
-      long long addend = 0;
-      OobjRelocType rt;
-      if (sscanf(line, "reloc %u %llu %127s %15s %lld", &sec, &off, sym, type, &addend) != 5) {
-        snprintf(err, err_len, "oobj v1 line %u: bad reloc record", line_no);
-        oobj_free(out);
-        return 0;
-      }
-      if (strcmp(type, "abs64") == 0) rt = OOBJ_RELOC_ABS64;
-      else if (strcmp(type, "pc32") == 0) rt = OOBJ_RELOC_PC32;
-      else if (strcmp(type, "pc64") == 0) rt = OOBJ_RELOC_PC64;
-      else {
-        snprintf(err, err_len, "oobj v1 line %u: unknown reloc type \"%s\"", line_no, type);
-        oobj_free(out);
-        return 0;
-      }
-      if (!oobj_append_reloc(out, (uint32_t)sec, (uint64_t)off, sym, rt, (int64_t)addend)) {
-        snprintf(err, err_len, "oobj v1 line %u: oom reloc append", line_no);
-        oobj_free(out);
-        return 0;
-      }
-    } else {
-      snprintf(err, err_len, "oobj v1 line %u: unknown record type \"%s\"", line_no, kind);
-      oobj_free(out);
-      return 0;
-    }
-  }
+static int parse_u32_strict(const char *s, int base, uint32_t *out) {
+  char *end = NULL;
+  unsigned long v;
+  if (!s || !s[0]) return 0;
+  errno = 0;
+  v = strtoul(s, &end, base);
+  if (errno == ERANGE || !end || *end != '\0' || end == s || v > (unsigned long)UINT32_MAX) return 0;
+  *out = (uint32_t)v;
+  return 1;
+}
+
+static int parse_i32_strict(const char *s, int base, int32_t *out) {
+  char *end = NULL;
+  long v;
+  if (!s || !s[0]) return 0;
+  errno = 0;
+  v = strtol(s, &end, base);
+  if (errno == ERANGE || !end || *end != '\0' || end == s || v < (long)INT32_MIN || v > (long)INT32_MAX) return 0;
+  *out = (int32_t)v;
+  return 1;
+}
+
+static int parse_u64_strict(const char *s, int base, uint64_t *out) {
+  char *end = NULL;
+  unsigned long long v;
+  if (!s || !s[0]) return 0;
+  errno = 0;
+  v = strtoull(s, &end, base);
+  if (errno == ERANGE || !end || *end != '\0' || end == s) return 0;
+  *out = (uint64_t)v;
+  return 1;
+}
+
+static int parse_i64_strict(const char *s, int base, int64_t *out) {
+  char *end = NULL;
+  long long v;
+  if (!s || !s[0]) return 0;
+  errno = 0;
+  v = strtoll(s, &end, base);
+  if (errno == ERANGE || !end || *end != '\0' || end == s) return 0;
+  *out = (int64_t)v;
   return 1;
 }
 
@@ -308,14 +275,24 @@ static int oobj_read_body_v2(FILE *f, char *line, OobjObject *out, char *err, si
       {
         uint8_t *data = NULL;
         size_t data_len = 0;
-        unsigned align = (unsigned)strtoul(fields[2], NULL, 10);
-        unsigned flags = (unsigned)strtoul(fields[3], NULL, 10);
+        uint32_t align = 0;
+        uint32_t flags = 0;
+        if (!parse_u32_strict(fields[2], 10, &align)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad section align", line_no);
+          oobj_free(out);
+          return 0;
+        }
+        if (!parse_u32_strict(fields[3], 10, &flags)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad section flags", line_no);
+          oobj_free(out);
+          return 0;
+        }
         if (!parse_hex_bytes(fields[4], &data, &data_len)) {
           snprintf(err, err_len, "oobj v2 line %u: bad section hex", line_no);
           oobj_free(out);
           return 0;
         }
-        if (!oobj_append_section(out, fields[1], (uint32_t)align, (uint32_t)flags, data, data_len)) {
+        if (!oobj_append_section(out, fields[1], align, flags, data, data_len)) {
           free(data);
           snprintf(err, err_len, "oobj v2 line %u: oom section append", line_no);
           oobj_free(out);
@@ -330,9 +307,19 @@ static int oobj_read_body_v2(FILE *f, char *line, OobjObject *out, char *err, si
         return 0;
       }
       {
-        int sec = (int)strtol(fields[2], NULL, 10);
-        unsigned long long value = strtoull(fields[3], NULL, 0);
-        if (!oobj_append_symbol(out, fields[1], sec, (uint64_t)value, strcmp(fields[4], "global") == 0)) {
+        int32_t sec = 0;
+        uint64_t value = 0;
+        if (!parse_i32_strict(fields[2], 10, &sec)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad symbol section index", line_no);
+          oobj_free(out);
+          return 0;
+        }
+        if (!parse_u64_strict(fields[3], 0, &value)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad symbol value", line_no);
+          oobj_free(out);
+          return 0;
+        }
+        if (!oobj_append_symbol(out, fields[1], sec, value, strcmp(fields[4], "global") == 0)) {
           snprintf(err, err_len, "oobj v2 line %u: oom symbol append", line_no);
           oobj_free(out);
           return 0;
@@ -345,10 +332,25 @@ static int oobj_read_body_v2(FILE *f, char *line, OobjObject *out, char *err, si
         return 0;
       }
       {
-        unsigned sec = (unsigned)strtoul(fields[1], NULL, 10);
-        unsigned long long off = strtoull(fields[2], NULL, 10);
-        long long addend = (long long)strtoll(fields[5], NULL, 10);
+        uint32_t sec = 0;
+        uint64_t off = 0;
+        int64_t addend = 0;
         OobjRelocType rt;
+        if (!parse_u32_strict(fields[1], 10, &sec)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad reloc section index", line_no);
+          oobj_free(out);
+          return 0;
+        }
+        if (!parse_u64_strict(fields[2], 10, &off)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad reloc offset", line_no);
+          oobj_free(out);
+          return 0;
+        }
+        if (!parse_i64_strict(fields[5], 10, &addend)) {
+          snprintf(err, err_len, "oobj v2 line %u: bad reloc addend", line_no);
+          oobj_free(out);
+          return 0;
+        }
         if (strcmp(fields[4], "abs64") == 0) rt = OOBJ_RELOC_ABS64;
         else if (strcmp(fields[4], "pc32") == 0) rt = OOBJ_RELOC_PC32;
         else if (strcmp(fields[4], "pc64") == 0) rt = OOBJ_RELOC_PC64;
@@ -357,7 +359,7 @@ static int oobj_read_body_v2(FILE *f, char *line, OobjObject *out, char *err, si
           oobj_free(out);
           return 0;
         }
-        if (!oobj_append_reloc(out, (uint32_t)sec, (uint64_t)off, fields[3], rt, (int64_t)addend)) {
+        if (!oobj_append_reloc(out, sec, off, fields[3], rt, addend)) {
           snprintf(err, err_len, "oobj v2 line %u: oom reloc append", line_no);
           oobj_free(out);
           return 0;
@@ -375,7 +377,6 @@ static int oobj_read_body_v2(FILE *f, char *line, OobjObject *out, char *err, si
 int oobj_read_file(const char *path, OobjObject *out, char *err, size_t err_len) {
   FILE *f = fopen(path, "rb");
   char *line = (char *)malloc(OOBJ_LINE_CAP);
-  int v2 = 0;
   if (!f) {
     free(line);
     snprintf(err, err_len, "cannot open oobj: %s", path);
@@ -393,26 +394,16 @@ int oobj_read_file(const char *path, OobjObject *out, char *err, size_t err_len)
     snprintf(err, err_len, "empty oobj: %s", path);
     return 0;
   }
-  if (strncmp(line, "OOBJv2", 6) == 0)
-    v2 = 1;
-  else if (strncmp(line, "OOBJv1", 6) != 0) {
+  if (strncmp(line, "OOBJv2", 6) != 0) {
     free(line);
     fclose(f);
-    snprintf(err, err_len, "bad oobj magic: %s", path);
+    snprintf(err, err_len, "bad oobj magic (expected OOBJv2): %s", path);
     return 0;
   }
-  if (v2) {
-    if (!oobj_read_body_v2(f, line, out, err, err_len, 2u)) {
-      free(line);
-      fclose(f);
-      return 0;
-    }
-  } else {
-    if (!oobj_read_body_v1(f, line, out, err, err_len, 2u)) {
-      free(line);
-      fclose(f);
-      return 0;
-    }
+  if (!oobj_read_body_v2(f, line, out, err, err_len, 2u)) {
+    free(line);
+    fclose(f);
+    return 0;
   }
   free(line);
   fclose(f);
